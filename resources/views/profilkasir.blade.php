@@ -107,7 +107,7 @@
             <div class="mt-8 w-full max-w-xs">
                 <!-- Tombol Edit Awal -->
                 <button type="button" id="btnEdit" onclick="mulaiEdit()" class="w-full py-2.5 bg-white/20 hover:bg-white hover:text-gray-900 font-bold rounded-xl text-xs transition shadow border border-white/30">
-                    [ EDIT PROFIL ]
+                    EDIT PROFIL 
                 </button>
 
                 <!-- Tombol Simpan & Batal (Sembunyikan default) -->

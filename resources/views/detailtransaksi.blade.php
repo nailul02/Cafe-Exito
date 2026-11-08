@@ -130,7 +130,7 @@
             <!-- Tombol Cetak Struk (Disembunyikan saat proses cetak berjalan) -->
             <div class="text-center no-print">
                 <button type="button" onclick="cetakStruk()" class="w-full py-2.5 bg-white/20 hover:bg-white hover:text-gray-900 font-bold rounded-xl text-xs transition shadow border border-white/30">
-                    [ CETAK STRUK ]
+                    CETAK STRUK 
                 </button>
             </div>
 
