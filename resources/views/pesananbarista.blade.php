@@ -115,7 +115,7 @@
                     </div>
                     <div class="space-y-1 text-xs font-medium text-gray-100 my-3 pl-2">
                         <p>☕ Americano × 1</p>
-                        <p>🧋 Matcha Latte × 2</p>
+                        <p> Matcha Latte × 2</p>
                     </div>
                     <div class="flex justify-between items-center text-xs text-gray-300">
                         <span>16.28</span>

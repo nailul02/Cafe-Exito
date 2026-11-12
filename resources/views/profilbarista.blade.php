@@ -112,7 +112,7 @@
                     <div class="mt-8 text-center">
                         <!-- Tombol Masuk Mode Edit -->
                         <button type="button" id="btnEdit" onclick="aktifkanModeEdit()" class="px-6 py-2 bg-white/20 hover:bg-white/30 text-white text-xs font-bold uppercase tracking-wider rounded-lg transition shadow border border-white/30">
-                            [ Edit Profil ]
+                            Edit Profil 
                         </button>
 
                         <!-- Tombol Simpan & Batal (Hidden Awal) -->
