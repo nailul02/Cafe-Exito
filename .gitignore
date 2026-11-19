@@ -25,3 +25,59 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Cafe Exito - local-only files
+/docs/
+/backups/
+
+# Backend secrets and local data
+/backend/.env
+/backend/.env.*
+!/backend/.env.example
+/backend/database/backups/
+/backend/storage/app/private/*
+!/backend/storage/app/private/.gitignore
+/backend/bootstrap/cache/*
+!/backend/bootstrap/cache/.gitignore
+/backend/.phpunit.result.cache
+
+# Frontend local files
+/frontend/.env
+/frontend/.env.*
+!/frontend/.env.example
+/frontend/node_modules/
+/frontend/dist/
+
+# Local documentation copy
+/cafe-exito/docs/
+
+# Local-only duplicate project copy
+/cafe-exito/
+
+# Legacy Laravel files kept locally at repository root
+/DomainError.php
+/artisan
+/composer.json
+/composer.lock
+/package.json
+/phpunit.xml
+/vite.config.js
+
+# Legacy Laravel directories kept locally at repository root
+/app/
+/bootstrap/
+/config/
+/database/
+/public/
+/resources/
+/routes/
+/storage/
+/tests/
+
+# Obsolete root Laravel configuration and agent instructions
+/.env.example
+/AGENTS.md
+/CLAUDE.md
+
+# Local npm configuration artifact; may contain registry credentials
+/ntent .npmrc

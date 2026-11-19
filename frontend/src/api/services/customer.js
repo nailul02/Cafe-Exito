@@ -1,0 +1,10 @@
+import { get, post, postForm } from '../http'
+export const customerApi = {
+  table: (qrToken) => get(`/customer/tables/${qrToken}`),
+  menus: () => get('/customer/menus'),
+  validateCart: (items) => post('/customer/cart/validate', { items }),
+  createOrder: (payload) => post('/customer/orders', payload),
+  order: (publicToken) => get(`/customer/orders/${publicToken}`),
+  uploadPaymentProof: (publicToken, file) => { const form = new FormData(); form.append('proof', file); return postForm(`/customer/orders/${publicToken}/payment-proof`, form) },
+  paymentInfo: () => get('/customer/payment-info'),
+}
