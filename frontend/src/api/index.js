@@ -18,3 +18,5 @@ export const usersApi = impl.usersApi
 export const reportsApi = impl.reportsApi
 export const attendanceApi = impl.attendanceApi
 export { ApiError } from './ApiError'
+export const refundsApi = impl.refundsApi
+export const ordersApi = impl.ordersApi

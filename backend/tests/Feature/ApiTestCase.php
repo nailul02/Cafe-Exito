@@ -55,6 +55,13 @@ abstract class ApiTestCase extends TestCase
         ], $headers);
     }
 
+    protected function uploadPaymentProof(string $token, string $fileName = 'proof.png'): void
+    {
+        $this->post(self::API."/customer/orders/$token/payment-proof", [
+            'proof' => \Illuminate\Http\UploadedFile::fake()->image($fileName, 20, 20),
+        ])->assertCreated();
+    }
+
     protected function category(string $name, string $group, string $station): MenuCategory
     {
         return MenuCategory::query()->firstOrCreate(['name' => $name], ['display_group' => $group, 'station' => $station]);

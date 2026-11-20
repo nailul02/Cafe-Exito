@@ -105,18 +105,6 @@ class OrderFlowTest extends ApiTestCase
         $this->assertSame(0, StockMovement::count());
     }
 
-    public function test_endpoint_pembatalan_pelanggan_tidak_tersedia(): void
-    {
-        $this->table('1');
-        $menu = $this->menuWithRecipe('Latte', ['Kopi' => [1000, 18]]);
-        $token = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]])->json('data.public_token');
-        $this->postJson(self::API."/customer/orders/$token/cancel")->assertNotFound();
-
-        $token2 = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]])->json('data.public_token');
-        $this->actingAsRole(UserRole::Kasir);
-        $this->postJson(self::API.'/cashier/payments/'.Order::where('public_token', $token2)->firstOrFail()->payment->id.'/verify')->assertOk();
-        $this->postJson(self::API."/customer/orders/$token2/cancel")->assertNotFound();
-    }
 
     public function test_client_request_id_mencegah_pesanan_ganda(): void
     {

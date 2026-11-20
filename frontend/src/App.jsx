@@ -27,6 +27,8 @@ import OwnerReportsPage from './pages/owner/OwnerReportsPage'
 import OwnerAttendancePage from './pages/owner/OwnerAttendancePage'
 import EmployeeAccountsPage from './pages/owner/EmployeeAccountsPage'
 import StaffAttendancePage from './pages/attendance/StaffAttendancePage'
+import RefundsPage from './pages/shared/RefundsPage'
+import OwnerOrderCancellationPage from './pages/owner/OwnerOrderCancellationPage'
 
 export default function App() {
   return (
@@ -54,6 +56,7 @@ export default function App() {
           <Route path="/cashier" element={<CashierDashboardPage />} />
           <Route path="/cashier/orders" element={<CashierOrdersPage />} />
           <Route path="/cashier/orders/:id" element={<TransactionDetailPage />} />
+          <Route path="/cashier/refunds" element={<RefundsPage />} />
           <Route path="/cashier/profile" element={<ProfilePage />} />
         </Route>
       </Route>
@@ -82,6 +85,7 @@ export default function App() {
           <Route path="/manager/users" element={<UsersPage />} />
           <Route path="/manager/reports" element={<ManagerReportsPage />} />
           <Route path="/manager/attendance" element={<ManagerAttendancePage />} />
+          <Route path="/manager/refund-conflicts" element={<RefundsPage />} />
           <Route path="/manager/profile" element={<ProfilePage surface="white" />} />
         </Route>
       </Route>
@@ -91,6 +95,8 @@ export default function App() {
         <Route element={<ManagementLayout />}>
           <Route path="/owner" element={<OwnerDashboardPage />} />
           <Route path="/owner/production" element={<ProductionDashboardPage />} />
+          <Route path="/owner/orders/cancellations" element={<OwnerOrderCancellationPage />} />
+          <Route path="/owner/refunds" element={<RefundsPage />} />
           <Route path="/owner/reports" element={<OwnerReportsPage />} />
           <Route path="/owner/attendance" element={<OwnerAttendancePage />} />
           <Route path="/owner/users" element={<EmployeeAccountsPage />} />

@@ -27,7 +27,6 @@ Homestead.yaml
 Thumbs.db
 
 # Cafe Exito - local-only files
-/docs/
 /backups/
 
 # Backend secrets and local data

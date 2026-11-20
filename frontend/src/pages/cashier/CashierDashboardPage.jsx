@@ -89,8 +89,8 @@ export default function CashierDashboardPage() {
                       </div>
                       <div className="text-right">
                         <p>{rupiah(o.total)}</p>
-                        <p className={cn('text-sm font-medium', o.status.code === 'menunggu_pembayaran' ? 'text-[#f5b04c]' : 'text-white/70')}>
-                          {ORDER_STATUS[o.status.code]?.label}
+                        <p className={cn('text-sm font-medium', o.payment?.status?.code === 'pending' ? 'text-[#f5b04c]' : 'text-white/70')}>
+                          {o.payment?.status?.label || ORDER_STATUS[o.status.code]?.label}
                         </p>
                       </div>
                       {o.payment?.status?.code === 'pending' ? (

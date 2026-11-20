@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { stationApi } from '../../api'
 import { useAuth } from '../../context/AuthContext'
@@ -61,6 +61,11 @@ export default function ProductionDashboardPage() {
       ticketsRes.refresh()
       dashboardRes.refresh()
     }
+  }
+
+  const startItem = async (ticket, item) => {
+    const out = await run(() => stationApi.startItem(ticket.station, ticket.id, item.order_detail_id), 'Item mulai diproses')
+    if (out) { setDetail(null); ticketsRes.refresh(); dashboardRes.refresh() }
   }
 
   const d = dashboardRes.data
@@ -174,9 +179,9 @@ export default function ProductionDashboardPage() {
                       {/* Item yang ditangani */}
                       <ul className="mt-4 space-y-1.5 border-t border-white/10 pt-3">
                         {t.items.map((i, idx) => (
-                          <li key={idx} className="flex justify-between text-base font-medium">
+                          <li key={idx} className="flex items-center justify-between gap-2 text-base font-medium">
                             <span>{i.name}</span>
-                            <span className="font-bold text-accent">×{i.qty}</span>
+                            <span className="flex items-center gap-2"><span className="font-bold text-accent">×{i.qty}</span>{canAct && i.qty > 0 && !i.started_at && <Button size="sm" variant="accent" loading={busy} onClick={() => startItem(t, i)}>Mulai</Button>}{i.started_at && <span className="text-xs text-white/75">Diproses</span>}</span>
                           </li>
                         ))}
                       </ul>
@@ -190,12 +195,7 @@ export default function ProductionDashboardPage() {
 
                       {canAct && (
                         <div className="flex gap-2">
-                          {t.status.code === 'antre' && (
-                            <Button size="sm" variant="accent" loading={busy} onClick={() => act(t, 'start')}>
-                              Mulai Proses
-                            </Button>
-                          )}
-                          {t.status.code === 'diproses' && (
+                          {t.status.code === 'diproses' && t.items.every((i) => !i.qty || i.started_at) && (
                             <Button size="sm" variant="accent" loading={busy} onClick={() => act(t, 'complete')}>
                               Selesaikan
                             </Button>

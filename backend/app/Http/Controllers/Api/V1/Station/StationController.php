@@ -51,6 +51,11 @@ class StationController extends Controller
         return ApiResponse::success(TicketResource::make($this->find($request, $ticket)), 'Pesanan mulai diproses');
     }
 
+    public function startItem(Request $request, string $station, int $ticket, int $detail, TicketService $service)
+    {
+        $service->startItem($this->find($request, $ticket), $detail, $request->user());
+        return ApiResponse::success(TicketResource::make($this->find($request, $ticket)), 'Item mulai diproses');
+    }
     public function complete(Request $request, string $station, int $ticket)
     {
         $this->tickets->complete($this->find($request, $ticket), $request->user());

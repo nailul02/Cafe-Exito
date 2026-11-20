@@ -40,9 +40,10 @@ class PaymentService
             }
             $settlingCompletedCashOrder = $order->status === OrderStatus::Selesai
                 && $payment->method === PaymentMethod::Tunai;
+            $effectiveMethod = $method !== null ? PaymentMethod::tryFrom($method) : $payment->method;
             if (
                 $order->order_source === 'qr_customer'
-                && ($payment->method === PaymentMethod::Qris || $method === PaymentMethod::Qris->value)
+                && $effectiveMethod === PaymentMethod::Qris
                 && ! $payment->proofs()->where('status', 'pending')->exists()
             ) {
                 throw \Illuminate\Validation\ValidationException::withMessages(['payment' => 'Bukti QRIS pelanggan harus tersedia dan menunggu verifikasi.']);

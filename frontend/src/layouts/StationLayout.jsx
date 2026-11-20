@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { NAV } from './navigation'
 import UserChip from './UserChip'
 import { cn } from '../lib/cn'
+import NotificationBell from '../components/ui/NotificationBell'
 
 /** Layout Kasir / Barista / Kitchen: sidebar cokelat penuh + konten putih (mengikuti wireframe Android Expanded). */
 export default function StationLayout() {
@@ -36,7 +37,7 @@ export default function StationLayout() {
         <header className="flex items-center justify-between gap-3 px-5 py-4">
           <button className="rounded-lg p-2 text-2xl lg:hidden" onClick={() => setOpen(true)} aria-label="Buka menu">☰</button>
           <span className="hidden lg:block" />
-          <UserChip />
+          <div className="flex items-center gap-3"><NotificationBell /><UserChip /></div>
         </header>
         <main className="min-w-0 flex-1 px-5 pb-8"><Outlet /></main>
       </div>

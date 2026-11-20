@@ -29,6 +29,7 @@ class PosOrderService
 
             $data['order_source'] = 'pos_cashier';
             $order = $this->orders->create($data);
+            $order->update(['created_by'=>$cashier->id]);
             $this->audit->record($cashier, 'order.pos_created', 'order', $order->id, [
                 'service_type' => $data['service_type'],
                 'payment_method' => $data['payment_method'],

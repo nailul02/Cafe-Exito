@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\V1\Report\AlertsController;
 use App\Http\Controllers\Api\V1\Report\AuditLogController;
 use App\Http\Controllers\Api\V1\Report\DashboardController;
 use App\Http\Controllers\Api\V1\Report\SalesReportController;
+use App\Http\Controllers\Api\V1\RefundController;
 use App\Http\Controllers\Api\V1\Station\StationController;
 use Illuminate\Support\Facades\Route;
 
@@ -49,6 +50,7 @@ Route::prefix('customer')->middleware(['throttle:customer', 'table.token'])->gro
     Route::get('payment-info', [CatalogController::class, 'paymentInfo']);
     Route::post('orders', [CustomerOrderController::class, 'store']);
     Route::get('orders/{publicToken}', [CustomerOrderController::class, 'show']);
+    Route::post('orders/{publicToken}/cancel', [CustomerOrderController::class, 'cancel']);
     Route::post('orders/{publicToken}/payment-proof', [CustomerOrderController::class, 'uploadProof'])->middleware('throttle:customer-proof');
 });
 
@@ -93,6 +95,7 @@ Route::middleware(['auth:sanctum', 'active', 'throttle:staff'])->group(function 
             Route::get('tickets/{ticket}', [StationController::class, 'show'])->whereNumber('ticket');
         });
         Route::middleware('station:act')->group(function () {
+            Route::post('tickets/{ticket}/items/{detail}/start', [StationController::class, 'startItem'])->whereNumber('ticket')->whereNumber('detail');
             Route::post('tickets/{ticket}/start', [StationController::class, 'start'])->whereNumber('ticket');
             Route::post('tickets/{ticket}/complete', [StationController::class, 'complete'])->whereNumber('ticket');
         });
@@ -104,6 +107,20 @@ Route::middleware(['auth:sanctum', 'active', 'throttle:staff'])->group(function 
         Route::get('orders/{order}', [OrderController::class, 'show']);
     });
     Route::post('orders/{order}/cancel', [OrderController::class, 'cancel'])->middleware('permission:orders.cancel');
+    Route::post('orders/{order}/items/cancel', [OrderController::class, 'cancelItem'])->middleware('permission:orders.cancel');
+    Route::get('refunds', [RefundController::class, 'index'])->middleware('permission:refund.view,refund.review');
+    Route::post('refunds', [RefundController::class, 'createManual'])->middleware('permission:refund.request');
+    Route::post('refunds/{refund}/decision', [RefundController::class, 'decide'])->middleware('permission:refund.review');
+    Route::post('refunds/{refund}/withdraw', [RefundController::class, 'withdraw'])->middleware('permission:refund.view');
+    Route::post('refunds/{refund}/revoke', [RefundController::class, 'revoke'])->middleware('permission:refund.review');
+    Route::post('refunds/{refund}/execute', [RefundController::class, 'execute'])->middleware('permission:refund.execute');
+    Route::get('refunds/{refund}/proof', [RefundController::class, 'proof'])->middleware('permission:refund.view,refund.review');
+    Route::post('refunds/{refund}/conflict-notes', [RefundController::class, 'conflictNote'])->middleware('permission:refund.conflict.document');
+    Route::get('refunds/{refund}/conflict-notes', [RefundController::class, 'conflictNotes'])->middleware('permission:refund.review');
+    Route::post('refund-conflict-notes/{note}/verify', [RefundController::class, 'verifyConflict'])->middleware('permission:refund.review');
+    Route::get('refund-conflict-notes/{note}/proof', [RefundController::class, 'conflictProof'])->middleware('permission:refund.conflict.document,refund.review');
+    Route::get('notifications', [RefundController::class, 'notifications'])->middleware('permission:notifications.view');
+    Route::post('notifications/{notification}/read', [RefundController::class, 'readNotification'])->middleware('permission:notifications.view');
     Route::get('transactions', [TransactionController::class, 'index'])->middleware('permission:transactions.view');
 
     // Admin: menu, resep, meja, pengguna, izin

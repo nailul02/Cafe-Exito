@@ -35,27 +35,47 @@ class TicketService
     public function start(OrderTicket $ticket, User $user): OrderTicket
     {
         return DB::transaction(function () use ($ticket, $user) {
+            $orderId=OrderTicket::query()->whereKey($ticket->id)->value('order_id');
+            $order = Order::query()->whereKey($orderId)->lockForUpdate()->firstOrFail();
             $ticket = OrderTicket::query()->whereKey($ticket->id)->lockForUpdate()->firstOrFail();
-            $order = Order::query()->whereKey($ticket->order_id)->lockForUpdate()->firstOrFail();
             if (! $ticket->status->canTransitionTo(TicketStatus::Diproses)) {
                 throw DomainError::invalidTransition('Tiket', $ticket->status->value, TicketStatus::Diproses->value);
             }
 
             $ticket->update(['status' => TicketStatus::Diproses->value, 'started_at' => now(), 'handled_by' => $user->id]);
+            $order->details()->where('station',$ticket->station->value)->whereNull('started_at')->update(['started_at'=>now()]);
             $this->log->ticket($order, $ticket, TicketStatus::Antre->value, TicketStatus::Diproses->value, $user);
             return $ticket;
+        });
+    }
+
+    public function startItem(OrderTicket $ticket, int $detailId, User $user): OrderTicket
+    {
+        return DB::transaction(function () use ($ticket,$detailId,$user) {
+            $orderId=OrderTicket::whereKey($ticket->id)->value('order_id');
+            $order=Order::whereKey($orderId)->lockForUpdate()->firstOrFail();
+            $ticket=OrderTicket::whereKey($ticket->id)->lockForUpdate()->firstOrFail();
+            $detail=$order->details()->whereKey($detailId)->lockForUpdate()->with('cancellations')->firstOrFail();
+            if($detail->station->value!==$ticket->station->value||$detail->started_at||$detail->qty<=(int)$detail->cancellations->sum('qty'))throw DomainError::invalidTransition('Item','belum dapat diproses','diproses');
+            $detail->update(['started_at'=>now()]);
+            if($ticket->status===TicketStatus::Antre){$from=$ticket->status->value;$ticket->update(['status'=>TicketStatus::Diproses->value,'started_at'=>now(),'handled_by'=>$user->id]);$this->log->ticket($order,$ticket,$from,TicketStatus::Diproses->value,$user);}
+            return $ticket->fresh();
         });
     }
 
     public function complete(OrderTicket $ticket, User $user): OrderTicket
     {
         return DB::transaction(function () use ($ticket, $user) {
+            $orderId=OrderTicket::query()->whereKey($ticket->id)->value('order_id');
+            $order = Order::query()->whereKey($orderId)->lockForUpdate()->firstOrFail();
             $ticket = OrderTicket::query()->whereKey($ticket->id)->lockForUpdate()->firstOrFail();
-            $order = Order::query()->whereKey($ticket->order_id)->lockForUpdate()->firstOrFail();
             if (! $ticket->status->canTransitionTo(TicketStatus::Selesai)) {
                 throw DomainError::invalidTransition('Tiket', $ticket->status->value, TicketStatus::Selesai->value);
             }
+            $unfinished=$order->details()->where('station',$ticket->station->value)->whereNull('started_at')->get()->filter(fn($d)=>$d->qty>(int)$d->cancellations()->sum('qty'));
+            if($unfinished->isNotEmpty())throw DomainError::invalidTransition('Tiket','masih ada item antre','selesai');
             $ticket->update(['status' => TicketStatus::Selesai->value, 'ready_at' => now(), 'handled_by' => $ticket->handled_by ?? $user->id]);
+            $order->details()->where('station',$ticket->station->value)->whereNotNull('started_at')->whereNull('ready_at')->update(['ready_at'=>now()]);
             $this->log->ticket($order, $ticket, TicketStatus::Diproses->value, TicketStatus::Selesai->value, $user);
 
             return $ticket;

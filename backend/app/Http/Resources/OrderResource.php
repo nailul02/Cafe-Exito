@@ -27,6 +27,9 @@ class OrderResource extends JsonResource
             'total' => $this->total,
             'items' => $this->details->map(fn ($d) => [
                 'id' => $d->id, 'menu_id' => $d->menu_id, 'name' => $d->menu_name, 'qty' => $d->qty,
+                'qty_cancelled' => (int) $d->cancellations->sum('qty'), 'qty_remaining' => max(0, $d->qty - (int) $d->cancellations->sum('qty')),
+                'started_at' => $d->started_at?->toIso8601String(), 'ready_at' => $d->ready_at?->toIso8601String(),
+                'cancellations' => $d->cancellations->map(fn ($c) => ['qty' => $c->qty, 'reason' => $c->reason, 'source' => $c->source, 'cancelled_at' => $c->created_at?->toIso8601String(), 'refund_status' => $c->refundItem?->refundRequest?->status])->values()->all(),
                 'unit_price' => $d->unit_price, 'subtotal' => $d->subtotal, 'station' => $d->station->value,
             ])->values()->all(),
             'payment' => $this->payment ? PaymentResource::make($this->payment)->resolve($request) : null,

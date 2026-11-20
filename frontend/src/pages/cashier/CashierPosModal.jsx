@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+﻿import { useState, useMemo, useRef } from 'react'
 import { customerApi, cashierApi } from '../../api'
 import { useResource } from '../../hooks/useResource'
 import { useAction } from '../../hooks/useAction'
@@ -14,6 +14,7 @@ function newRequestId() {
       return (char === 'x' ? random : (random & 0x3) | 0x8).toString(16)
     })
 }
+
 export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
   const [serviceType, setServiceType] = useState('dine_in') // 'dine_in' | 'takeaway'
   const [tableNumber, setTableNumber] = useState('')
@@ -112,7 +113,7 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
       })),
     }
 
-    const res = await run(() => cashierApi.createPosOrder(payload), 'Pesanan POS dibuat; pembayaran menunggu konfirmasi kasir')
+    const res = await run(() => cashierApi.createPosOrder(payload), 'Pesanan POS dibuat; pembayaran masih pending')
     if (res) {
       // Reset form
       setCart({})
@@ -416,15 +417,15 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                 </div>
               </div>
 
-              {/* Status pembayaran dicatat setelah kasir menerima pembayaran. */}
+              {/* Payment recording is a separate cashier action from order creation. */}
               {paymentMethod === 'tunai' ? (
                 <div className="rounded-lg bg-white/5 p-3 border border-white/10 text-xs text-white/80">
-                  Pesanan dapat diproses dengan status pembayaran menunggu. Catat nominal dan kembalian saat pembayaran diterima dari daftar pesanan.
+                  Pembayaran tunai dicatat terpisah melalui daftar pesanan setelah uang diterima. Pesanan dapat selesai sementara payment tetap pending.
                 </div>
               ) : (
                 <div className="rounded-lg bg-blue-900/30 p-3 border border-blue-500/30 text-xs text-blue-200">
                   <p className="font-semibold mb-1">ℹ️ Verifikasi QRIS Manual</p>
-                  <p>Minta pelanggan memindai QRIS kasir dan pastikan nominal transfer berhasil sebelum memproses pesanan.</p>
+                  <p>QRIS statis diverifikasi manual oleh Kasir melalui daftar pesanan. Payment tetap pending sampai verifikasi dicatat.</p>
                 </div>
               )}
 
@@ -443,7 +444,7 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                   }
                   onClick={handleSubmit}
                 >
-                  Proses & Selesaikan
+                  Buat Pesanan
                 </Button>
               </div>
             </div>

@@ -27,7 +27,7 @@ class TicketResource extends JsonResource
             'handled_by' => $this->handler?->name,
             'order_status' => Rp::enum($order->status),
             // Hanya item milik stasiun ini (Barista tidak melihat makanan, dan sebaliknya).
-            'items' => $order->details->where('station', $this->station)->map(fn ($d) => ['name' => $d->menu_name, 'qty' => $d->qty])->values()->all(),
+            'items' => $order->details->where('station', $this->station)->map(fn ($d) => ['order_detail_id'=>$d->id,'name' => $d->menu_name, 'qty' => $d->qty-(int)$d->cancellations->sum('qty'), 'qty_cancelled'=>(int)$d->cancellations->sum('qty'), 'started_at'=>$d->started_at?->toIso8601String(), 'ready_at'=>$d->ready_at?->toIso8601String()])->filter(fn($i)=>$i['qty']>0)->values()->all(),
         ];
     }
 }

@@ -292,8 +292,8 @@ export function verifyIn(s, paymentId, userId, payload = {}, at = now()) {
   p.status = 'verified'; p.paid_at = at; p.verified_by = userId
   if (p.proof) p.proof.status = 'verified'
   p.transaction_number = `TRX-${ymd(at)}-${pad(p.id)}`
-  order.status = 'dibayar'; order.paid_at = at
-  createTicketsIn(s, order.id, at)
+  const orderAlreadyCompleted = order.status === 'selesai'
+  if (!orderAlreadyCompleted) { order.status = 'dibayar'; order.paid_at = at; createTicketsIn(s, order.id, at) } else { order.paid_at = at }
   return p
 }
 

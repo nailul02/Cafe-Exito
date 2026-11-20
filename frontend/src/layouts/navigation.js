@@ -12,6 +12,7 @@ const managerNav = [
   { to: '/manager/users', label: 'Meja & QR' },
   { to: '/manager/reports', label: 'Kelola Laporan' },
   { to: '/manager/attendance', label: 'Rekap Absensi' },
+  { to: '/manager/refund-conflicts', label: 'Konflik Refund' },
   { to: '/attendance', label: 'Absensi Saya' },
   { to: '/manager/profile', label: 'Profil' },
 ]
@@ -20,6 +21,7 @@ export const NAV = {
   kasir: [
     { to: '/cashier', label: 'Dashboard', end: true },
     { to: '/cashier/orders', label: 'Pesanan' },
+    { to: '/cashier/refunds', label: 'Refund' },
     { to: '/attendance', label: 'Absensi' },
     { to: '/cashier/profile', label: 'Profil' },
   ],
@@ -31,6 +33,8 @@ export const NAV = {
   owner: [
     { to: '/owner', label: 'Dashboard', end: true },
     { to: '/owner/production', label: 'Monitoring Produksi' },
+    { to: '/owner/orders/cancellations', label: 'Pembatalan Item' },
+    { to: '/owner/refunds', label: 'Persetujuan Refund' },
     { to: '/owner/reports', label: 'Laporan Penjualan' },
     { to: '/owner/attendance', label: 'Laporan Absensi' },
     { to: '/owner/users', label: 'Akun Karyawan' },

@@ -43,10 +43,15 @@ const orderOut = (s, o) => {
     customer_name: o.customer_name || (o.service_type === 'takeaway' ? 'Pelanggan Takeaway' : null),
     status: label(o.status, LABELS.order),
     ordered_at: o.ordered_at, paid_at: o.paid_at, completed_at: o.completed_at, total: o.total,
-    items: s.details.filter((d) => d.order_id === o.id).map((d) => ({ id: d.id, menu_id: d.menu_id, name: d.name, qty: d.qty, unit_price: d.unit_price, subtotal: d.subtotal, station: d.station })),
+    items: s.details.filter((d) => d.order_id === o.id).map((d) => ({ id: d.id, menu_id: d.menu_id, name: d.name, qty: d.qty, qty_cancelled: d.qty_cancelled || 0, qty_remaining: d.qty - (d.qty_cancelled || 0), started_at: d.started_at || null, ready_at: d.ready_at || null, cancellations: d.cancellations || [], unit_price: d.unit_price, subtotal: d.subtotal, station: d.station })),
     payment: paymentOut(s, p),
     tickets: s.tickets.filter((t) => t.order_id === o.id).map((t) => ({ id: t.id, station: t.station, status: label(t.status, LABELS.ticket), started_at: t.started_at, ready_at: t.ready_at })),
   }
+}
+
+export const ordersApi = {
+  async list() { await wait(); need(currentUser(),'orders.view'); const s=load(); return s.orders.slice().sort((a,b)=>b.id-a.id).map(o=>orderOut(s,o)) },
+  async cancelItem(orderId,payload) { await wait(); const u=currentUser(); need(u,'orders.cancel'); const s=load(); const o=s.orders.find(x=>x.id===Number(orderId)); const d=s.details.find(x=>x.id===Number(payload.detail_id)&&x.order_id===o?.id); if(!d)throw notFound('Item'); if(d.started_at)throw new ApiError({status:409,code:'ORDER_NOT_CANCELLABLE',message:'Item sudah mulai diproses.'}); const qty=Number(payload.qty); const rem=d.qty-(d.qty_cancelled||0); if(!String(payload.reason||'').trim()||qty<1||qty>rem)throw new ApiError({status:422,code:'VALIDATION_FAILED',message:'Alasan atau kuantitas tidak valid.'}); d.qty_cancelled=(d.qty_cancelled||0)+qty; d.cancellations||=[]; d.cancellations.push({qty,reason:payload.reason,source:'owner_cancellation'}); const p=s.payments.find(x=>x.order_id===o.id); if(p?.status==='pending'){p.amount-=d.unit_price*qty;o.total-=d.unit_price*qty} if(p?.status==='verified'){s.refundRequests||=[];s.refundRequests.push({id:Date.now(),order_id:o.id,payment_id:p.id,status:'requested',amount:d.unit_price*qty,source:'owner_cancellation',reason:payload.reason})} if(s.details.filter(x=>x.order_id===o.id).every(x=>(x.qty_cancelled||0)>=x.qty))o.status='dibatalkan'; save(s); return orderOut(s,o) },
 }
 const ticketOut = (s, t) => {
   const o = s.orders.find((x) => x.id === t.order_id)
@@ -59,7 +64,7 @@ const ticketOut = (s, t) => {
     station: t.station, status: label(t.status, LABELS.ticket),
     ordered_at: o.ordered_at, started_at: t.started_at, ready_at: t.ready_at,
     handled_by: userName(s, t.handled_by), order_status: label(o.status, LABELS.order),
-    items: s.details.filter((d) => d.order_id === o.id && d.station === t.station).map((d) => ({ name: d.name, qty: d.qty })),
+    items: s.details.filter((d) => d.order_id === o.id && d.station === t.station && d.qty>(d.qty_cancelled||0)).map((d) => ({ order_detail_id:d.id,name: d.name, qty: d.qty-(d.qty_cancelled||0), qty_cancelled:d.qty_cancelled||0, started_at:d.started_at||null, ready_at:d.ready_at||null })),
   }
 }
 const menuAdmin = (s, m) => {
@@ -113,24 +118,37 @@ export const customerApi = {
     if (payment.proof?.status === 'pending') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Bukti sedang menunggu verifikasi kasir.' })
     payment.proof = { status: 'pending', reject_reason: null, uploaded_at: new Date().toISOString() }; save(s); return { status: 'pending', uploaded_at: payment.proof.uploaded_at, mime_type: file.type, size_bytes: file.size }
   },
+  async cancelOrder(publicToken, payload = {}) {
+    await wait(); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); if (!o) throw notFound('Pesanan')
+    const d = s.details.find((x) => x.id === Number(payload.detail_id) && x.order_id === o.id); if (!d) throw notFound('Item pesanan')
+    if (!String(payload.reason || '').trim()) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Alasan pembatalan wajib diisi.' })
+    const qty = Number(payload.qty); const remaining = d.qty - (d.qty_cancelled || 0)
+    if (d.started_at) throw new ApiError({ status: 409, code: 'ORDER_NOT_CANCELLABLE', message: 'Item sudah mulai diproses.' })
+    if (!Number.isInteger(qty) || qty < 1 || qty > remaining) throw new ApiError({ status: 422, code: 'INVALID_CANCELLATION_QUANTITY', message: 'Kuantitas pembatalan tidak valid.' })
+    d.qty_cancelled = (d.qty_cancelled || 0) + qty; d.cancellations ||= []; d.cancellations.push({ qty, reason: payload.reason.trim(), source: 'customer_cancellation', cancelled_at: new Date().toISOString() })
+    const p = s.payments.find((x) => x.order_id === o.id)
+    if (p?.status === 'pending') { p.amount -= d.unit_price * qty; o.total -= d.unit_price * qty }
+    if (p?.status === 'verified') { s.refundRequests ||= []; s.refundRequests.push({ id: Date.now(), order_id: o.id, payment_id: p.id, status: 'requested', source: 'customer_cancellation', amount: d.unit_price * qty, reason: payload.reason.trim() }) }
+    if (s.details.filter((x) => x.order_id === o.id).every((x) => x.qty_cancelled >= x.qty)) { o.status = 'dibatalkan'; o.cancel_reason = payload.reason.trim(); if (p?.status === 'pending') p.status = 'cancelled'; s.tickets.filter((t) => t.order_id === o.id && t.status === 'antre').forEach((t) => { t.status = 'dibatalkan' }) }
+    save(s); return orderOut(s, o)
+  },
   async paymentInfo() { await wait(60); const s = load(); return { cafe_name: s.settings.cafe_name, qris_image_url: s.settings.qris_image_url, instructions: { qris: 'Bayar dengan QRIS statis. Setelah pesanan dibuat, unggah bukti pembayaran melalui halaman status pesanan. Pesanan diproses setelah kasir memverifikasi bukti.', tunai: 'Bayar tunai di kasir. Pesanan diproses setelah kasir memverifikasi.' } } },
 }
 
 // ---------- Kasir ----------
 export const cashierApi = {
-  async dashboard() { await wait(); need(currentUser(), 'dashboard.cashier'); const s = load(); const today = s.orders.filter((o) => sameDay(o.ordered_at)); return { new_orders: today.filter((o) => ['menunggu_pembayaran', 'dibayar'].includes(o.status)).length, awaiting_payment: s.orders.filter((o) => o.status === 'menunggu_pembayaran').length, orders_today: today.length, revenue_today: s.payments.filter((p) => p.status === 'verified' && sameDay(p.paid_at)).reduce((a, p) => a + p.amount, 0) } },
+  async dashboard() { await wait(); need(currentUser(), 'dashboard.cashier'); const s = load(); const today = s.orders.filter((o) => sameDay(o.ordered_at)); return { new_orders: today.filter((o) => ['menunggu_pembayaran', 'dibayar'].includes(o.status)).length, awaiting_payment: s.payments.filter((p) => p.status === 'pending').length, orders_today: today.length, revenue_today: s.payments.filter((p) => p.status === 'verified' && sameDay(p.paid_at)).reduce((a, p) => a + p.amount, 0) } },
   async orders(params = {}) {
     await wait(); need(currentUser(), 'payments.verify'); const s = load(); const st = params['filter[status]']; const q = (params.search || '').toLowerCase()
-    return s.orders.filter((o) => sameDay(o.ordered_at) && (!st || st === 'semua' || o.status === st) && (!q || o.order_number.toLowerCase().includes(q) || o.display_number.includes(q))).sort((a, b) => b.id - a.id).map((o) => orderOut(s, o))
+    return s.orders.filter((o) => sameDay(o.ordered_at) && (!st || st === 'semua' || (st === 'menunggu_pembayaran' ? s.payments.some((p) => p.order_id === o.id && p.status === 'pending') : o.status === st)) && (!q || o.order_number.toLowerCase().includes(q) || o.display_number.includes(q))).sort((a, b) => b.id - a.id).map((o) => orderOut(s, o))
   },
-  async order(id) { await wait(60); const s = load(); const o = s.orders.find((x) => x.id === Number(id)); if (!o) throw notFound('Pesanan'); return orderOut(s, o) },
   async completeOrder(id) {
     await wait(); need(currentUser(), 'payments.verify'); const s = load(); const order = s.orders.find((x) => x.id === Number(id));
     if (!order) throw notFound('Pesanan')
     const tickets = s.tickets.filter((ticket) => ticket.order_id === order.id)
     if (!tickets.length || tickets.some((ticket) => ticket.status !== 'selesai')) throw new ApiError({ status: 409, code: 'INVALID_STATE_TRANSITION', message: 'Pesanan hanya dapat diselesaikan setelah semua tiket produksi selesai.' })
     order.status = 'selesai'; order.completed_at = new Date().toISOString(); save(s); return orderOut(s, order)
-  },
+  },  async order(id) { await wait(60); const s = load(); const o = s.orders.find((x) => x.id === Number(id)); if (!o) throw notFound('Pesanan'); return orderOut(s, o) },
   async verify(paymentId, payload = {}) { await wait(); const u = currentUser(); need(u, 'payments.verify'); const s = load(); const p = s.payments.find((x) => x.id === Number(paymentId)); const o = p && s.orders.find((x) => x.id === p.order_id); if (p?.method === 'qris' && o?.order_source === 'qr_customer' && p.proof?.status !== 'pending') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Bukti QRIS pelanggan harus tersedia.' }); const verified = verifyIn(s, Number(paymentId), u.id, payload); save(s); return orderOut(s, s.orders.find((o) => o.id === verified.order_id)) },
   async reject(paymentId, payload = {}) {
     await wait(); need(currentUser(), 'payments.verify'); const s = load(); const p = s.payments.find((x) => x.id === Number(paymentId)); if (!p) throw notFound('Pembayaran')
@@ -158,6 +176,9 @@ export const cashierApi = {
       method: payment_method,
       cashier: u.id,
     })
+    if (payment_method === 'tunai') {
+      createTicketsIn(s, order.id, now())
+    }
     save(s)
     return orderOut(s, s.orders.find((o) => o.id === order.id))
   },
@@ -165,6 +186,18 @@ export const cashierApi = {
     await wait(40)
     return load().tables.filter((t) => t.status === 'active')
   },
+}
+
+export const refundsApi = {
+  async list(){await wait();const u=currentUser();if(!can(u,'refund.view')&&!can(u,'refund.review'))throw forbid();const s=load();return s.refundRequests||[]},
+  async request(payload){await wait();const u=currentUser();need(u,'refund.request');const s=load();const p=s.payments.find(x=>x.id===Number(payload.payment_id));if(!p||p.status!=='verified')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Pembayaran harus verified.'});s.refundRequests||=[];const r={id:Date.now(),payment_id:p.id,order_id:p.order_id,amount:Number(payload.amount),reason:payload.reason,status:'requested',source:'manual',requested_by:u.id};s.refundRequests.push(r);save(s);return r},
+  async decide(id,decision,reason){await wait();const u=currentUser();need(u,'refund.review');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r)throw notFound('Refund');if(r.status!=='requested')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Pengajuan bukan menunggu keputusan.'});r.status=decision;r.decision_reason=reason;save(s);return r},
+  async withdraw(id,reason){await wait();const u=currentUser();need(u,'refund.view');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='requested')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Tidak dapat ditarik.'});r.status='withdrawn';r.withdraw_reason=reason;save(s);return r},
+  async revoke(id,reason){await wait();const u=currentUser();need(u,'refund.review');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='approved')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Tidak dapat dicabut.'});r.status='approval_revoked';r.approval_revoke_reason=reason;save(s);return r},
+  async execute(id,payload){await wait();const u=currentUser();need(u,'refund.execute');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='approved')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Belum disetujui.'});r.status='completed';r.executed_by=u.id;r.method=payload.get('method');save(s);return r},
+  async notifications(){await wait();return []}, async readNotification(){return null},
+  async conflictNote(id,data){await wait();const u=currentUser();need(u,'refund.conflict.document');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='conflict_of_interest')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Bukan konflik kepentingan.'});r.conflict_note=data;r.verified=u.role==='owner';save(s);return r},
+  async verifyConflict(id){await wait();need(currentUser(),'refund.review');return {id:Number(id),verified:true}},
 }
 
 // ---------- Stasiun (Barista / Kitchen) ----------
@@ -212,6 +245,7 @@ export const stationApi = {
   },
   async ticket(station, id) { await wait(60); const u = currentUser(); guardStation(u, station); const s = load(); const t = s.tickets.find((x) => x.id === Number(id) && (station === 'all' || x.station === station)); if (!t) throw notFound('Tiket'); return ticketOut(s, t) },
   async start(station, id) { await wait(); const u = currentUser(); const s = load(); const t = s.tickets.find((x) => x.id === Number(id)); if (!t) throw notFound('Tiket'); if (!canAct(u, t.station)) throw forbid(); startIn(s, t.id, u.id); save(s); return ticketOut(s, t) },
+  async startItem(station, ticketId, detailId) { await wait(); const u = currentUser(); const s = load(); const t = s.tickets.find((x) => x.id === Number(ticketId)); const d = s.details.find((x) => x.id === Number(detailId)); if (!t || !d || d.order_id !== t.order_id || d.station !== t.station) throw notFound('Item tiket'); if (!canAct(u,t.station)) throw forbid(); d.started_at = new Date().toISOString(); if (t.status === 'antre') { t.status = 'diproses'; t.started_at = d.started_at; t.handled_by = u.id } const o=s.orders.find(x=>x.id===t.order_id); if(o.status==='dibayar')o.status='diproses'; save(s); return ticketOut(s,t) },
   async complete(station, id) { await wait(); const u = currentUser(); const s = load(); const t = s.tickets.find((x) => x.id === Number(id)); if (!t) throw notFound('Tiket'); if (!canAct(u, t.station)) throw forbid(); completeIn(s, t.id, u.id); save(s); return ticketOut(s, t) },
 }
 
@@ -361,7 +395,7 @@ export const reportsApi = {
   async transactions(params = {}) { await wait(); need(currentUser(), 'transactions.view'); const s = load(); const q = (params.search || '').toLowerCase(); return s.payments.filter((p) => p.status === 'verified' && (!params.method || p.method === params.method)).map((p) => ({ order: orderOut(s, s.orders.find((o) => o.id === p.order_id)), payment: paymentOut(s, p) })).filter((x) => !q || x.payment.transaction_number.toLowerCase().includes(q) || x.order.items.some((i) => i.name.toLowerCase().includes(q))).sort((a, b) => new Date(b.payment.paid_at) - new Date(a.payment.paid_at)).slice(0, 25) },
   async orders(params = {}) { await wait(); need(currentUser(), 'orders.view'); const s = load(); const st = params['filter[status]']; return s.orders.filter((o) => sameDay(o.ordered_at) && (!st || o.status === st)).sort((a, b) => b.id - a.id).map((o) => orderOut(s, o)) },
   async auditLogs() { await wait(); return load().audit },
-  async alerts() { await wait(60); const s = load(); return { low_stock_count: s.ingredients.filter((i) => i.is_active && stockLevel(i) !== 'aman').length, awaiting_payment: s.orders.filter((o) => o.status === 'menunggu_pembayaran').length, new_tickets: s.tickets.filter((t) => t.status === 'antre').length } },
+  async alerts() { await wait(60); const s = load(); return { low_stock_count: s.ingredients.filter((i) => i.is_active && stockLevel(i) !== 'aman').length, awaiting_payment: s.payments.filter((p) => p.status === 'pending').length, new_tickets: s.tickets.filter((t) => t.status === 'antre').length } },
 }
 
 const mockAttendancePayload = (payload, userId, type) => {

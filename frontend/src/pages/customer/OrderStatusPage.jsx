@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { customerApi } from '../../api'
 import { useResource } from '../../hooks/useResource'
@@ -15,6 +15,9 @@ export default function OrderStatusPage() {
   const res = useResource(() => customerApi.order(token), [token], { poll: true })
   const [file, setFile] = useState(null)
   const [fileError, setFileError] = useState('')
+  const [reason, setReason] = useState('')
+
+  const [cancelQty, setCancelQty] = useState({})
   const { busy, run } = useAction()
   const upload = async () => {
     if (!file) return
@@ -28,7 +31,10 @@ export default function OrderStatusPage() {
       <AsyncView res={res} empty={() => false}>
         {(o) => {
           const steps = customerSteps(o.status.code)
-          const itemCount = o.items.reduce((a, i) => a + i.qty, 0)
+          const canCancel = (item) => !item.started_at && (item.qty_remaining ?? item.qty) > 0 && o.status.code !== 'dibatalkan' && o.status.code !== 'selesai'
+
+          const cancelItem = async (item) => { if (!reason.trim()) return; const out = await run(() => customerApi.cancelOrder(token, { detail_id: item.id, qty: Number(cancelQty[item.id] || item.qty_remaining || item.qty), reason: reason.trim() }), 'Item pesanan dibatalkan'); if (out) { setReason(''); res.reload() } }
+          const itemCount = o.items.reduce((a, i) => a + (i.qty_remaining ?? i.qty), 0)
           return (
             <>
               <div className="mt-8"><p className="text-3xl font-medium">{o.display_number}</p><p className="text-lg font-medium text-[#797474]">{o.table?.number ? `Meja ${o.table.number}` : (o.customer_name || 'Takeaway')} · {itemCount} item</p></div>
@@ -57,6 +63,18 @@ export default function OrderStatusPage() {
                   ))}
                 </ol>
               )}
+              <div className="mt-6 space-y-3">
+                {o.items.filter(canCancel).map((item) => <div key={item.id} className="rounded-xl border border-black/10 p-3 text-sm">
+                  <div className="flex items-center justify-between gap-3"><span className="font-medium">{item.name} · {item.qty_remaining ?? item.qty} tersisa</span>
+                    <div className="flex items-center gap-2"><select aria-label={`Jumlah pembatalan ${item.name}`} className="rounded border px-2 py-1" value={cancelQty[item.id] || item.qty_remaining || item.qty} onChange={(e) => setCancelQty((s) => ({ ...s, [item.id]: e.target.value }))}>{Array.from({ length: item.qty_remaining ?? item.qty }, (_, n) => n + 1).map((n) => <option key={n} value={n}>{n}</option>)}</select>
+                    <Button size="sm" variant="outline" loading={busy} disabled={!reason.trim()} onClick={() => cancelItem(item)}>Batalkan</Button></div></div>
+                  {item.started_at && <p className="mt-1 text-xs text-brand/60">Sudah mulai diproses</p>}
+                  {item.cancellations?.map((c,idx) => <p key={idx} className="mt-1 text-xs text-brand/60">{c.qty} dibatalkan · {c.reason}{c.refund_status ? ` · Refund ${c.refund_status}` : ''}</p>)}
+                </div>)}
+                {o.items.some(canCancel) && <label className="block text-sm">Alasan pembatalan wajib
+                  <textarea className="mt-1 w-full rounded-lg border border-black/15 p-3" maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Tuliskan alasan pembatalan" />
+                </label>}
+              </div>
               <div className="mt-auto space-y-3 pb-6 pt-10">
                 <div className="rounded-2xl bg-brand px-6 py-5 text-center text-lg font-medium leading-snug text-white">Selamat Menikmati<br />Terimakasih Ditunggu<br />Pesanan Berikutnya</div>
                 <Button variant="sand" block onClick={() => navigate('/order/menu')}>Pesan lagi</Button>

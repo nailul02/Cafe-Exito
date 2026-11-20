@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { NAV } from './navigation'
 import { cn } from '../lib/cn'
 import { dateLong } from '../lib/format'
+import NotificationBell from '../components/ui/NotificationBell'
 
 /** Layout Manager (aksen oranye) dan Owner (aksen cokelat tua), mengikuti desain tablet Figma. */
 export default function ManagementLayout() {
@@ -44,7 +45,7 @@ export default function ManagementLayout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between gap-3 border-b border-black/5 bg-paper/80 px-5 py-3">
           <button className="rounded-lg p-2 text-xl lg:hidden" onClick={() => setOpen(true)} aria-label="Buka menu">☰</button>
-          <p className="text-sm text-brand/70">{dateLong()}</p>
+          <div className="flex items-center gap-3"><p className="text-sm text-brand/70">{dateLong()}</p><NotificationBell /></div>
         </header>
         <main className="min-w-0 flex-1 p-5 lg:p-7"><Outlet /></main>
       </div>

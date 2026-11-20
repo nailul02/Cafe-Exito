@@ -36,6 +36,13 @@ enum Permission: string
     case AttendanceRecord = 'attendance.record';
     case AttendanceViewAll = 'attendance.view_all';
     case AttendanceReport = 'attendance.report';
+    case RefundView = 'refund.view';
+    case RefundRequest = 'refund.request';
+    case RefundReview = 'refund.review';
+    case RefundExecute = 'refund.execute';
+    case RefundAudit = 'refund.audit';
+    case RefundConflictDocument = 'refund.conflict.document';
+    case NotificationsView = 'notifications.view';
 
     /** @return list<string> */
     public static function values(): array

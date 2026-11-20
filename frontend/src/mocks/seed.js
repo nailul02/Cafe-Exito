@@ -1,10 +1,10 @@
-﻿// Data contoh realistis untuk mode mock. Bukan data Cafe Exito yang sebenarnya.
+// Data contoh realistis untuk mode mock. Bukan data Cafe Exito yang sebenarnya.
 // Semua kata sandi akun mock: "password".
 export const PERMISSION_DEFAULTS = {
-  owner: ['dashboard.owner', 'orders.view', 'transactions.view', 'queue.view_all', 'menus.view', 'ingredients.view', 'purchases.view', 'stock.view', 'reports.view', 'attendance.view_all', 'users.manage', 'permissions.grant'],
-  manager: ['dashboard.manager', 'orders.view', 'orders.cancel', 'transactions.view', 'queue.view_all', 'menus.view', 'menus.manage', 'ingredients.view', 'ingredients.manage', 'recipes.manage', 'suppliers.manage', 'purchases.view', 'purchases.manage', 'purchases.receive', 'stock.view', 'stock.adjust', 'tables.manage', 'reports.view', 'audit.view', 'attendance.view_all', 'attendance.record'],
-  kasir: ['dashboard.cashier', 'payments.verify', 'transactions.view', 'menus.view', 'orders.create_pos', 'attendance.record'],
-  barista_kitchen: ['dashboard.station', 'queue.barista', 'queue.kitchen', 'attendance.record'],
+  owner: ['dashboard.owner', 'orders.view', 'orders.cancel', 'refund.review', 'refund.audit', 'refund.conflict.document', 'notifications.view', 'transactions.view', 'queue.view_all', 'menus.view', 'ingredients.view', 'purchases.view', 'stock.view', 'reports.view', 'attendance.view_all', 'users.manage', 'permissions.grant'],
+  manager: ['dashboard.manager', 'orders.view',  'transactions.view', 'queue.view_all', 'menus.view', 'menus.manage', 'ingredients.view', 'ingredients.manage', 'recipes.manage', 'suppliers.manage', 'purchases.view', 'purchases.manage', 'purchases.receive', 'stock.view', 'stock.adjust', 'tables.manage', 'reports.view', 'audit.view', 'attendance.view_all', 'attendance.record', 'refund.conflict.document', 'notifications.view'],
+  kasir: ['dashboard.cashier', 'refund.view', 'refund.execute', 'refund.request', 'notifications.view', 'payments.verify', 'transactions.view', 'menus.view', 'orders.create_pos', 'attendance.record'],
+  barista_kitchen: ['dashboard.station', 'notifications.view', 'queue.barista', 'queue.kitchen', 'attendance.record'],
 }
 export const GRANTABLE = ['queue.barista', 'queue.kitchen', 'purchases.receive', 'ingredients.view', 'stock.view', 'menus.view', 'attendance.record']
 

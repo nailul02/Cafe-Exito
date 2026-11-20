@@ -14,7 +14,7 @@ class Order extends Model
         'public_token', 'order_number', 'client_request_id', 'table_id',
         'service_type', 'order_source', 'customer_name',
         'status', 'ordered_at', 'paid_at',
-        'completed_at', 'cancelled_at', 'cancel_reason', 'cancelled_by', 'total',
+        'completed_at', 'cancelled_at', 'cancel_reason', 'cancelled_by', 'created_by', 'total',
     ];
 
     protected function casts(): array
