@@ -6,12 +6,11 @@ use App\Enums\UserRole;
 use App\Models\Ingredient;
 use App\Models\Order;
 use App\Models\StockMovement;
-use Illuminate\Http\UploadedFile;
 
 /** Alur inti: pesan → verifikasi kasir → tiket stasiun → produksi → selesai. */
 class OrderFlowTest extends ApiTestCase
 {
-    public function test_pesanan_campuran_menghasilkan_dua_tiket_tanpa_perubahan_stok(): void
+    public function test_pesanan_campuran_menghasilkan_dua_tiket_tanpa_mengubah_stok_legacy(): void
     {
         $this->table('1');
         $latte = $this->menuWithRecipe('Latte', ['Kopi' => [1000, 18], 'Susu' => [2000, 150]], false, 20000);
@@ -28,7 +27,6 @@ class OrderFlowTest extends ApiTestCase
 
         $this->actingAsRole(UserRole::Kasir);
         $paymentId = $order->payment->id;
-        $this->post(self::API.'/customer/orders/'.$token.'/payment-proof', ['proof' => UploadedFile::fake()->image('mixed.png', 20, 20)])->assertCreated();
         $this->postJson(self::API."/cashier/payments/$paymentId/verify")->assertOk()->assertJsonPath('data.status.code', 'dibayar')
             ->assertJsonPath('data.payment.status.code', 'verified');
         $this->assertSame(['barista', 'kitchen'], $order->tickets()->orderBy('station')->pluck('station')->map->value->all());
@@ -36,9 +34,9 @@ class OrderFlowTest extends ApiTestCase
         $this->assertSame('1000.000', Ingredient::where('name', 'Kopi')->value('stock'));
         $this->assertSame('2000.000', Ingredient::where('name', 'Susu')->value('stock'));
         $this->assertSame('5000.000', Ingredient::where('name', 'Nasi')->value('stock'));
-        $this->assertSame(0, StockMovement::count());
+        $this->assertSame(0, StockMovement::where('type', 'pemakaian_pesanan')->count());
 
-        // Status tiket produksi terpisah; stok bukan bagian dari alur operasional.
+        // Inventori legacy tidak memengaruhi lifecycle tiket.
         $barista = $this->actingAsRole(UserRole::BaristaKitchen);
         $ticket = $order->tickets()->where('station', 'barista')->firstOrFail();
         $kitchenTicket = $order->tickets()->where('station', 'kitchen')->firstOrFail();
@@ -47,17 +45,17 @@ class OrderFlowTest extends ApiTestCase
         $this->assertSame('1000.000', Ingredient::where('name', 'Kopi')->value('stock'));
         $this->assertSame('2000.000', Ingredient::where('name', 'Susu')->value('stock'));
         $this->assertSame('5000.000', Ingredient::where('name', 'Nasi')->value('stock'));
-        $this->assertSame(0, StockMovement::count());
+        $this->assertSame(0, StockMovement::where('type', 'pemakaian_pesanan')->count());
         $this->assertSame($barista->id, $ticket->refresh()->handled_by);
 
         $this->postJson(self::API."/station/barista/tickets/{$ticket->id}/complete")->assertOk();
-        $this->assertSame('dibayar', $order->refresh()->status->value, 'station tidak mengubah status pesanan');
+        $this->assertSame('diproses', $order->refresh()->status->value, 'pesanan belum selesai: tiket Kitchen masih antre');
 
         $this->actingAsRole(UserRole::BaristaKitchen, ['station' => 'kitchen']);
         $kt = $order->tickets()->where('station', 'kitchen')->firstOrFail();
         $this->postJson(self::API."/station/kitchen/tickets/{$kt->id}/start")->assertOk();
         $this->postJson(self::API."/station/kitchen/tickets/{$kt->id}/complete")->assertOk();
-        $this->assertSame('dibayar', $order->refresh()->status->value, 'status order menunggu kasir menyelesaikan pesanan');
+        $this->assertSame('diproses', $order->refresh()->status->value);
         $this->actingAsRole(UserRole::Kasir);
         $this->postJson(self::API."/cashier/orders/{$order->id}/complete")->assertOk();
         $this->assertSame('selesai', $order->refresh()->status->value);
@@ -65,7 +63,7 @@ class OrderFlowTest extends ApiTestCase
         $this->getJson(self::API."/customer/orders/$token")->assertOk()->assertJsonPath('data.status.code', 'selesai');
     }
 
-    public function test_stok_tidak_mempengaruhi_verifikasi_pembayaran_dan_pembuatan_tiket(): void
+    public function test_stok_legacy_tidak_menghalangi_verifikasi_pembayaran(): void
     {
         $this->table('1');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [100, 18]]);
@@ -82,10 +80,10 @@ class OrderFlowTest extends ApiTestCase
         $this->actingAsRole(UserRole::BaristaKitchen);
         $this->postJson(self::API."/station/barista/tickets/{$ticket->id}/start")->assertOk();
         $this->assertSame('5.000', Ingredient::where('name', 'Kopi')->value('stock'));
-        $this->assertSame(0, StockMovement::count());
+        $this->assertSame(0, StockMovement::where('type', 'pemakaian_pesanan')->count());
     }
 
-    public function test_ketersediaan_menu_tidak_ditentukan_oleh_stok(): void
+    public function test_ketersediaan_menu_tidak_ditentukan_oleh_stok_legacy(): void
     {
         $this->table('1');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [0, 18]]);
@@ -102,9 +100,27 @@ class OrderFlowTest extends ApiTestCase
         $this->postJson(self::API."/cashier/payments/$paymentId/verify", ['amount_received' => 5000])->assertStatus(422)->assertJsonPath('error.code', 'AMOUNT_TOO_LOW');
         $this->postJson(self::API."/cashier/payments/$paymentId/verify", ['amount_received' => 50000])->assertOk()->assertJsonPath('data.payment.change', 30000);
         $this->postJson(self::API."/cashier/payments/$paymentId/verify")->assertStatus(409)->assertJsonPath('error.code', 'PAYMENT_ALREADY_PROCESSED');
-        $this->assertSame(0, StockMovement::count());
+        $this->assertSame(0, StockMovement::where('type', 'pemakaian_pesanan')->count());
     }
 
+    public function test_pembatalan_pelanggan_ditolak_setelah_item_mulai_diproses(): void
+    {
+        $this->table('1');
+        $menu = $this->menuWithRecipe('Latte', ['Kopi' => [1000, 18]]);
+        $token = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]])->json('data.public_token');
+        $detailId = Order::where('public_token', $token)->firstOrFail()->details()->firstOrFail()->id;
+        $this->postJson(self::API."/customer/orders/$token/cancel", ['detail_id' => $detailId, 'qty' => 1, 'reason' => 'Berubah pikiran'])->assertOk()->assertJsonPath('data.status.code', 'dibatalkan');
+
+        $token2 = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]])->json('data.public_token');
+        $this->actingAsRole(UserRole::Kasir);
+        $this->postJson(self::API.'/cashier/payments/'.Order::where('public_token', $token2)->firstOrFail()->payment->id.'/verify')->assertOk();
+        $order2 = Order::where('public_token', $token2)->firstOrFail();
+        $ticket = $order2->tickets()->firstOrFail();
+        $detail2 = $order2->details()->firstOrFail();
+        $this->actingAsRole(UserRole::BaristaKitchen);
+        $this->postJson(self::API."/station/barista/tickets/{$ticket->id}/items/{$detail2->id}/start")->assertOk();
+        $this->postJson(self::API."/customer/orders/$token2/cancel", ['detail_id' => $detail2->id, 'qty' => 1, 'reason' => 'Berubah pikiran'])->assertStatus(409)->assertJsonPath('error.code', 'ORDER_NOT_CANCELLABLE');
+    }
 
     public function test_client_request_id_mencegah_pesanan_ganda(): void
     {
@@ -126,7 +142,7 @@ class OrderFlowTest extends ApiTestCase
         $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]], 'tunai', '1', ['X-Table-Token' => $t1->qr_token])->assertCreated();
     }
 
-    public function test_hanya_owner_menyetujui_pembatalan_dan_refund_tidak_dianggap_otomatis(): void
+    public function test_pembatalan_owner_membuat_request_refund_tanpa_mengubah_payment(): void
     {
         $this->table('1');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [1000, 18]]);
@@ -134,17 +150,15 @@ class OrderFlowTest extends ApiTestCase
         $order = Order::firstOrFail();
         $this->actingAsRole(UserRole::Kasir);
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
-        $this->actingAsRole(UserRole::Manager);
-        $this->postJson(self::API."/orders/{$order->id}/cancel", ['reason' => 'Salah pesan'])->assertForbidden();
         $this->actingAsRole(UserRole::Owner);
-        $this->postJson(self::API."/orders/{$order->id}/cancel", ['reason' => 'Salah pesan', 'restore_stock' => true])->assertUnprocessable()->assertJsonValidationErrors('restore_stock');
-        $this->postJson(self::API."/orders/{$order->id}/cancel", ['reason' => 'Salah pesan'])->assertOk()->assertJsonPath('data.status.code', 'dibatalkan');
+        $detail = $order->details()->firstOrFail();
+        $this->postJson(self::API."/orders/{$order->id}/items/cancel", ['detail_id' => $detail->id, 'qty' => 2, 'reason' => 'Salah pesan'])->assertOk()->assertJsonPath('data.status.code', 'dibatalkan');
         $this->assertSame('verified', $order->payments()->first()->status->value);
+        $this->assertDatabaseHas('refund_requests', ['payment_id' => $order->payment->id, 'amount' => 40000, 'source' => 'owner_cancellation', 'status' => 'requested']);
         $this->assertSame('1000.000', Ingredient::where('name', 'Kopi')->value('stock'));
-        $this->assertSame(0, StockMovement::count());
     }
 
-    public function test_pesanan_berbeda_dapat_dibayar_meski_stok_terbatas(): void
+    public function test_pembayaran_tidak_dibatasi_stok_legacy(): void
     {
         $this->table('1');
         $menu = $this->menuWithRecipe('Kopi Terbatas', ['Kopi' => [10, 10]]);
@@ -158,7 +172,7 @@ class OrderFlowTest extends ApiTestCase
         $this->postJson(self::API.'/cashier/payments/'.$second->payment->id.'/verify')->assertOk();
 
         $this->assertSame('10.000', Ingredient::where('name', 'Kopi')->value('stock'));
-        $this->assertSame(0, StockMovement::count());
+        $this->assertSame(0, StockMovement::where('type', 'pemakaian_pesanan')->count());
         $this->assertSame(1, $second->tickets()->count());
     }
 }

@@ -27,6 +27,13 @@ class AuthTest extends ApiTestCase
             ->assertJsonStructure(['errors' => ['login']]);
     }
 
+    public function test_login_menangani_input_login_non_string_tanpa_error_rate_limiter(): void
+    {
+        $this->postJson(self::API.'/auth/login', ['login' => ['malformed'], 'password' => 'tidak-dipakai'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['login']);
+    }
+
     public function test_akun_nonaktif_ditolak(): void
     {
         User::factory()->inactive()->create(['username' => 'nonaktif', 'password' => 'rahasia-123']);

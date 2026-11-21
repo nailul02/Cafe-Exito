@@ -21,8 +21,12 @@ class PaymentResource extends JsonResource
             'paid_at' => $this->paid_at?->toIso8601String(),
             'verified_by' => $this->verifier?->name,
             'transaction_number' => $this->transaction_number,
-            'reject_reason' => $this->reject_reason,
-            'proof' => $this->relationLoaded('latestProof') && $this->latestProof ? ['status' => $this->latestProof->status, 'reject_reason' => $this->latestProof->reject_reason, 'uploaded_at' => $this->latestProof->uploaded_at?->toIso8601String(), 'preview_available' => true] : null,
+            'proof' => $this->whenLoaded('latestProof', fn () => $this->latestProof ? [
+                'status' => $this->latestProof->status,
+                'reject_reason' => $this->latestProof->reject_reason,
+                'uploaded_at' => $this->latestProof->uploaded_at?->toIso8601String(),
+                'preview_available' => true,
+            ] : null),
         ];
     }
 }

@@ -36,6 +36,13 @@ class Payment extends Model
         return $this->belongsTo(User::class, 'verified_by');
     }
 
-    public function proofs(): HasMany { return $this->hasMany(PaymentProof::class); }
-    public function latestProof(): HasOne { return $this->hasOne(PaymentProof::class)->latestOfMany(); }
+    public function proofs(): HasMany
+    {
+        return $this->hasMany(PaymentProof::class);
+    }
+
+    public function latestProof(): HasOne
+    {
+        return $this->hasOne(PaymentProof::class)->latestOfMany();
+    }
 }

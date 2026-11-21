@@ -33,9 +33,14 @@ class AppServiceProvider extends ServiceProvider
 
         Gate::policy(User::class, UserPolicy::class);
 
-        RateLimiter::for('login', fn (Request $r) => Limit::perMinute(5)->by(mb_strtolower((string) $r->input('login')).'|'.$r->ip()));
+        RateLimiter::for('login', function (Request $r) {
+            $login = $r->input('login');
+            $normalizedLogin = is_string($login) ? mb_strtolower($login) : '';
+
+            return Limit::perMinute(5)->by($normalizedLogin.'|'.$r->ip());
+        });
         RateLimiter::for('customer', fn (Request $r) => Limit::perMinute(60)->by($r->ip()));
-        RateLimiter::for('customer-proof', fn (Request $r) => Limit::perMinute(5)->by($r->ip().'|'.(string) $r->route('publicToken')));
+        RateLimiter::for('customer-proof', fn (Request $r) => Limit::perMinute(5)->by($r->ip().'|'.$r->route('publicToken')));
         RateLimiter::for('staff', fn (Request $r) => Limit::perMinute(300)->by((string) ($r->user()?->id ?: $r->ip())));
     }
 }

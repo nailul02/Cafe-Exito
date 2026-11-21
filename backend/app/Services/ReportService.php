@@ -41,13 +41,13 @@ class ReportService
         $tz = config('app.timezone');
         $hourly = ($granularity ?? ($period === 'daily' && ! $from ? 'hour' : 'day')) === 'hour';
 
-        $totals = $this->payments($start, $end)->selectRaw('COUNT(*) AS orders, COALESCE(SUM(payments.amount), 0) AS revenue')->first();
-        $revenue = (int) $totals->revenue;
+        $totals = $this->payments($start, $end)->selectRaw('COUNT(*) AS orders')->first();
+        $revenue = (int) $this->details($start, $end)->sum(DB::raw('GREATEST(order_details.qty - COALESCE(cancelled.qty,0),0) * order_details.unit_price'));
         $orders = (int) $totals->orders;
-        $items = (int) $this->details($start, $end)->sum('order_details.qty');
+        $items = (int) $this->details($start, $end)->sum(DB::raw('GREATEST(order_details.qty - COALESCE(cancelled.qty,0),0)'));
 
         $byMethod = [];
-        foreach ($this->payments($start, $end)->selectRaw('payments.method AS method, COUNT(*) AS orders, SUM(payments.amount) AS amount')->groupBy('payments.method')->get()->keyBy('method') as $row) {
+        foreach ($this->details($start, $end)->selectRaw('payments.method AS method, COUNT(DISTINCT order_details.order_id) AS orders, SUM(GREATEST(order_details.qty - COALESCE(cancelled.qty,0),0) * order_details.unit_price) AS amount')->groupBy('payments.method')->get()->keyBy('method') as $row) {
             $byMethod[$row->method] = $row;
         }
         $methods = [];
@@ -60,12 +60,12 @@ class ReportService
         $categories = $this->details($start, $end)
             ->join('menus', 'menus.id', '=', 'order_details.menu_id')
             ->join('menu_categories', 'menu_categories.id', '=', 'menus.category_id')
-            ->selectRaw('menu_categories.name AS category, SUM(order_details.qty) AS qty, SUM(order_details.subtotal) AS amount')
+            ->selectRaw('menu_categories.name AS category, SUM(GREATEST(order_details.qty - COALESCE(cancelled.qty,0),0)) AS qty, SUM(GREATEST(order_details.qty - COALESCE(cancelled.qty,0),0) * order_details.unit_price) AS amount')
             ->groupBy('menu_categories.name')->orderByDesc('amount')->get()
             ->map(fn ($r) => ['category' => $r->category, 'qty' => (int) $r->qty, 'amount' => (int) $r->amount, 'percent' => $this->percent((int) $r->amount, $revenue)])->all();
 
         $top = $this->details($start, $end)
-            ->selectRaw('order_details.menu_name AS name, SUM(order_details.qty) AS qty, SUM(order_details.subtotal) AS amount')
+            ->selectRaw('order_details.menu_name AS name, SUM(GREATEST(order_details.qty - COALESCE(cancelled.qty,0),0)) AS qty, SUM(GREATEST(order_details.qty - COALESCE(cancelled.qty,0),0) * order_details.unit_price) AS amount')
             ->groupBy('order_details.menu_name')->orderByDesc('qty')->limit(5)->get()
             ->map(fn ($r) => ['name' => $r->name, 'qty' => (int) $r->qty, 'amount' => (int) $r->amount])->all();
 
@@ -79,6 +79,7 @@ class ReportService
             ->join('payments', function ($j) {
                 $j->on('payments.order_id', '=', 'orders.id')->where('payments.status', '=', 'verified');
             })
+            ->where('orders.status', '<>', 'dibatalkan')
             ->whereBetween('payments.paid_at', [$start, $end])->whereNotNull('order_tickets.ready_at')
             ->selectRaw('AVG(EXTRACT(EPOCH FROM (order_tickets.ready_at - orders.ordered_at))) AS seconds')->value('seconds');
 
@@ -86,7 +87,9 @@ class ReportService
             'period' => $period,
             'from' => $start->toIso8601String(),
             'to' => $end->toIso8601String(),
-            'totals' => ['orders' => $orders, 'revenue' => $revenue, 'average_order' => $orders ? (int) round($revenue / $orders) : 0, 'items' => $items],
+            'totals' => ['orders' => $orders, 'revenue' => $revenue, 'average_order' => $orders ? (int) round($revenue / $orders) : 0, 'items' => $items,
+                'refunds_approved' => (int) DB::table('refund_requests')->whereIn('status', ['approved', 'completed'])->whereBetween('decided_at', [$start, $end])->sum('amount'),
+                'refunds_completed' => (int) DB::table('refund_requests')->where('status', 'completed')->whereBetween('completed_at', [$start, $end])->sum('amount')],
             'by_method' => $methods,
             'by_category' => $categories,
             'series' => $this->series($start, $end, $hourly, $tz),
@@ -113,16 +116,21 @@ class ReportService
     {
         return DB::table('payments')
             ->join('orders', 'orders.id', '=', 'payments.order_id')
-            ->where('payments.status', 'verified')->where('orders.status', '<>', 'dibatalkan')
-            ->whereBetween('payments.paid_at', [$start, $end])->where('orders.status', '<>', 'dibatalkan');
+            ->where('payments.status', 'verified')
+            ->where('orders.status', '<>', 'dibatalkan')
+            ->whereBetween('payments.paid_at', [$start, $end]);
     }
 
     private function details(Carbon $start, Carbon $end): Builder
     {
-        return DB::table('order_details')
+        $cancelled = DB::table('order_item_cancellations')->selectRaw('order_detail_id, SUM(qty) AS qty')->groupBy('order_detail_id');
+
+        return DB::table('order_details')->leftJoinSub($cancelled, 'cancelled', 'cancelled.order_detail_id', '=', 'order_details.id')
+            ->join('orders', 'orders.id', '=', 'order_details.order_id')
             ->join('payments', function ($j) {
                 $j->on('payments.order_id', '=', 'order_details.order_id')->where('payments.status', '=', 'verified');
             })
+            ->where('orders.status', '<>', 'dibatalkan')
             ->whereBetween('payments.paid_at', [$start, $end]);
     }
 
@@ -130,8 +138,8 @@ class ReportService
     private function series(Carbon $start, Carbon $end, bool $hourly, string $tz): array
     {
         $fmt = $hourly ? 'HH24' : 'YYYY-MM-DD';
-        $rows = $this->payments($start, $end)
-            ->selectRaw("to_char(payments.paid_at AT TIME ZONE ?, '$fmt') AS bucket, SUM(payments.amount) AS amount, COUNT(*) AS orders", [$tz])
+        $rows = $this->details($start, $end)
+            ->selectRaw("to_char(payments.paid_at AT TIME ZONE ?, '$fmt') AS bucket, SUM(GREATEST(order_details.qty - COALESCE(cancelled.qty,0),0) * order_details.unit_price) AS amount, COUNT(DISTINCT orders.id) AS orders", [$tz])
             ->groupBy('bucket')->get()->keyBy('bucket');
 
         $out = [];

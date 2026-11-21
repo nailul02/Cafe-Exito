@@ -7,13 +7,10 @@ use App\Enums\PaymentStatus;
 use App\Enums\Station;
 use App\Enums\TicketStatus;
 use App\Http\Resources\OrderResource;
-use App\Models\Ingredient;
 use App\Models\Menu;
 use App\Models\Order;
 use App\Models\OrderTicket;
 use App\Models\Payment;
-use App\Models\Purchase;
-use Illuminate\Support\Collection;
 
 /** Ringkasan dashboard per role. Hanya membaca; tidak ada logika bisnis tulis di sini. */
 class DashboardService
@@ -89,14 +86,4 @@ class DashboardService
         ];
     }
 
-    /** @return Collection<int, Ingredient> */
-    public function lowStock(): Collection
-    {
-        return Ingredient::query()->where('is_active', true)->orderBy('name')->get()->filter(fn (Ingredient $i) => $i->level()->isLow())->values();
-    }
-
-    private function pendingPurchases(): int
-    {
-        return Purchase::query()->whereIn('status', [PurchaseStatus::Dipesan->value, PurchaseStatus::DiterimaSebagian->value])->count();
-    }
 }

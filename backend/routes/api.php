@@ -108,6 +108,8 @@ Route::middleware(['auth:sanctum', 'active', 'throttle:staff'])->group(function 
     });
     Route::post('orders/{order}/cancel', [OrderController::class, 'cancel'])->middleware('permission:orders.cancel');
     Route::post('orders/{order}/items/cancel', [OrderController::class, 'cancelItem'])->middleware('permission:orders.cancel');
+    Route::get('transactions', [TransactionController::class, 'index'])->middleware('permission:transactions.view');
+
     Route::get('refunds', [RefundController::class, 'index'])->middleware('permission:refund.view,refund.review');
     Route::post('refunds', [RefundController::class, 'createManual'])->middleware('permission:refund.request');
     Route::post('refunds/{refund}/decision', [RefundController::class, 'decide'])->middleware('permission:refund.review');
@@ -121,9 +123,8 @@ Route::middleware(['auth:sanctum', 'active', 'throttle:staff'])->group(function 
     Route::get('refund-conflict-notes/{note}/proof', [RefundController::class, 'conflictProof'])->middleware('permission:refund.conflict.document,refund.review');
     Route::get('notifications', [RefundController::class, 'notifications'])->middleware('permission:notifications.view');
     Route::post('notifications/{notification}/read', [RefundController::class, 'readNotification'])->middleware('permission:notifications.view');
-    Route::get('transactions', [TransactionController::class, 'index'])->middleware('permission:transactions.view');
 
-    // Admin: menu, resep, meja, pengguna, izin
+    // Admin: menu, meja, pengguna, izin
     Route::prefix('admin')->group(function () {
         Route::get('menu-categories', [AdminMenuController::class, 'categories'])->middleware('permission:menus.view');
         Route::get('menus', [AdminMenuController::class, 'index'])->middleware('permission:menus.view');
@@ -134,7 +135,6 @@ Route::middleware(['auth:sanctum', 'active', 'throttle:staff'])->group(function 
             Route::delete('menus/{menu}', [AdminMenuController::class, 'destroy']);
             Route::patch('menus/{menu}/availability', [AdminMenuController::class, 'availability']);
         });
-
         Route::middleware('permission:tables.manage')->group(function () {
             Route::get('tables', [TableController::class, 'index']);
             Route::post('tables', [TableController::class, 'store']);

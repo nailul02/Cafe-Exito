@@ -11,6 +11,12 @@ use Illuminate\Support\Facades\Schema;
 /** Izin efektif = bawaan role (config/permissions.php) + izin khusus per akun (user_permissions). */
 class PermissionService
 {
+    /** Izin legacy dapat tetap tersimpan, tetapi tidak aktif pada scope operasional. */
+    private const RETIRED_PERMISSIONS = [
+        'ingredients.view', 'ingredients.manage', 'recipes.manage', 'suppliers.manage',
+        'purchases.view', 'purchases.manage', 'purchases.receive', 'stock.view', 'stock.adjust',
+    ];
+
     /** @var array<int, list<string>> */
     private array $memo = [];
 
@@ -41,7 +47,10 @@ class PermissionService
             return [];
         }
 
-        return $user->extraPermissions()->pluck('permission')->all();
+        return $user->extraPermissions()
+            ->whereNotIn('permission', self::RETIRED_PERMISSIONS)
+            ->pluck('permission')
+            ->all();
     }
 
     /** @return list<string> */
@@ -51,6 +60,10 @@ class PermissionService
             $this->roleDefaults($user->role->value),
             $this->granted($user),
         )));
+        $permissions = array_values(array_filter(
+            $permissions,
+            static fn (string $permission): bool => ! in_array($permission, self::RETIRED_PERMISSIONS, true),
+        ));
 
         if (in_array($user->role->value, ['barista_kitchen', 'barista', 'kitchen'], true)) {
             $stationPermission = $user->station?->permission();

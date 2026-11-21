@@ -14,6 +14,6 @@ class PosOrderController extends Controller
     {
         $order = $orders->create($request->validated(), $request->user());
 
-        return ApiResponse::created(OrderResource::make($order), 'Pesanan POS dibuat. Pembayaran masih menunggu konfirmasi kasir.');
+        return ApiResponse::created(OrderResource::make($order), 'Pesanan POS dibuat; pembayaran masih menunggu pencatatan kasir');
     }
 }

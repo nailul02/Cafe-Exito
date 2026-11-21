@@ -11,6 +11,7 @@ use App\Models\Payment;
 use App\Models\User;
 use App\Support\NumberGenerator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Pembayaran = tunai atau QRIS statis dengan VERIFIKASI MANUAL kasir. Tidak ada payment gateway.
@@ -20,6 +21,7 @@ class PaymentService
 {
     public function __construct(
         private readonly TicketService $tickets,
+        private readonly OrderService $orders,
         private readonly StatusLogger $log,
         private readonly AuditService $audit,
         private readonly PaymentProofService $proofs,
@@ -32,23 +34,26 @@ class PaymentService
     public function verify(Payment $payment, User $cashier, ?string $method = null, ?int $amountReceived = null): Order
     {
         return DB::transaction(function () use ($payment, $cashier, $method, $amountReceived) {
+            $orderId = Payment::query()->whereKey($payment->id)->value('order_id');
+            $order = Order::query()->whereKey($orderId)->lockForUpdate()->firstOrFail();
             $payment = Payment::query()->whereKey($payment->id)->lockForUpdate()->firstOrFail();
-            $order = Order::query()->whereKey($payment->order_id)->lockForUpdate()->firstOrFail();
 
             if ($payment->status !== PaymentStatus::Pending) {
                 throw DomainError::paymentAlreadyProcessed();
             }
-            $settlingCompletedCashOrder = $order->status === OrderStatus::Selesai
-                && $payment->method === PaymentMethod::Tunai;
-            $effectiveMethod = $method !== null ? PaymentMethod::tryFrom($method) : $payment->method;
-            if (
-                $order->order_source === 'qr_customer'
-                && $effectiveMethod === PaymentMethod::Qris
-                && ! $payment->proofs()->where('status', 'pending')->exists()
-            ) {
-                throw \Illuminate\Validation\ValidationException::withMessages(['payment' => 'Bukti QRIS pelanggan harus tersedia dan menunggu verifikasi.']);
+            if ($payment->method === PaymentMethod::Qris && $method === PaymentMethod::Tunai->value) {
+                throw ValidationException::withMessages(['method' => 'Pembayaran QRIS tidak dapat diubah menjadi tunai saat verifikasi.']);
             }
-            if (! $settlingCompletedCashOrder && ! $order->status->canTransitionTo(OrderStatus::Dibayar)) {
+            if ($order->order_source === 'qr_customer') {
+                if ($method !== null && $method !== $payment->method->value) {
+                    throw ValidationException::withMessages(['method' => 'Metode pembayaran Self-Order tidak dapat diubah saat verifikasi.']);
+                }
+                if ($payment->method === PaymentMethod::Qris && ! $payment->proofs()->where('status', 'pending')->exists()) {
+                    throw ValidationException::withMessages(['payment' => 'Bukti QRIS pelanggan yang menunggu verifikasi wajib tersedia.']);
+                }
+            }
+            $orderAlreadyCompleted = $order->status === OrderStatus::Selesai;
+            if (! $orderAlreadyCompleted && ! $order->status->canTransitionTo(OrderStatus::Dibayar)) {
                 throw DomainError::invalidTransition('Pesanan', $order->status->value, OrderStatus::Dibayar->value);
             }
 
@@ -69,20 +74,19 @@ class PaymentService
                 $this->proofs->review($payment, $cashier, true);
             }
 
-            $paidAt = now();
             $payment->fill([
                 'status' => PaymentStatus::Verified->value,
-                'paid_at' => $paidAt,
+                'paid_at' => now(),
                 'verified_by' => $cashier->id,
                 'transaction_number' => NumberGenerator::next('TRX', 'payments', 'transaction_number'),
             ])->save();
 
-            if ($settlingCompletedCashOrder) {
-                // Late cash settlement records the payment without reopening or changing a completed order.
-                $order->update(['paid_at' => $paidAt]);
+            if ($orderAlreadyCompleted) {
+                // Completion is an operational state; recording payment later must not undo it.
+                $order->update(['paid_at' => now()]);
             } else {
                 $from = $order->status->value;
-                $order->update(['status' => OrderStatus::Dibayar->value, 'paid_at' => $paidAt]);
+                $order->update(['status' => OrderStatus::Dibayar->value, 'paid_at' => now()]);
                 $this->log->order($order, $from, OrderStatus::Dibayar->value, $cashier, 'Pembayaran diverifikasi');
                 $this->tickets->createForOrder($order, $cashier);
             }
@@ -95,21 +99,28 @@ class PaymentService
     public function reject(Payment $payment, User $cashier, ?string $reason = null): Order
     {
         return DB::transaction(function () use ($payment, $cashier, $reason) {
+            $orderId = Payment::query()->whereKey($payment->id)->value('order_id');
+            $order = Order::query()->whereKey($orderId)->lockForUpdate()->firstOrFail();
             $payment = Payment::query()->whereKey($payment->id)->lockForUpdate()->firstOrFail();
-            $order = Order::query()->whereKey($payment->order_id)->lockForUpdate()->firstOrFail();
             if ($payment->status !== PaymentStatus::Pending) {
                 throw DomainError::paymentAlreadyProcessed();
             }
-            if ($payment->method === PaymentMethod::Tunai) {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'payment' => 'Pembayaran tunai tetap menunggu pelunasan; catat pembayaran setelah uang diterima.',
-                ]);
-            }
             if ($reason === null || trim($reason) === '') {
-                throw \Illuminate\Validation\ValidationException::withMessages(['reason' => 'Alasan penolakan wajib diisi.']);
+                throw ValidationException::withMessages(['reason' => 'Alasan penolakan wajib diisi.']);
+            }
+            if ($payment->method === PaymentMethod::Tunai) {
+                throw ValidationException::withMessages(['payment' => 'Pembayaran tunai tetap menunggu pelunasan; catat setelah uang diterima.']);
+            }
+            if ($order->order_source === 'qr_customer') {
+                if ($payment->method !== PaymentMethod::Qris || ! $payment->proofs()->where('status', 'pending')->exists()) {
+                    throw ValidationException::withMessages(['payment' => 'Bukti QRIS pelanggan yang menunggu verifikasi wajib tersedia.']);
+                }
+                $this->proofs->review($payment, $cashier, false, $reason);
             }
             $payment->update(['status' => PaymentStatus::Rejected->value, 'reject_reason' => $reason, 'verified_by' => $cashier->id]);
-            $this->proofs->review($payment, $cashier, false, $reason);
+            if ($order->order_source !== 'qr_customer') {
+                $this->orders->markCancelled($order, $reason, $cashier);
+            }
             $this->audit->record($cashier, 'payment.rejected', 'payment', $payment->id, ['order_id' => $order->id, 'reason' => $reason]);
 
             return $order;

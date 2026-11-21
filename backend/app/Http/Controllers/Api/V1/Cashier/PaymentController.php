@@ -14,7 +14,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PaymentController extends Controller
 {
-    private const WITH = ['table', 'details', 'payment.verifier', 'payment.latestProof', 'payments.proofs', 'tickets'];
+    private const WITH = ['table', 'details.cancellations.refundItem.refundRequest', 'payment.verifier', 'payment.latestProof', 'payments.proofs', 'tickets'];
 
     public function __construct(private readonly PaymentService $payments) {}
 
@@ -37,6 +37,10 @@ class PaymentController extends Controller
         abort_unless($payment->order()->where('order_source', 'qr_customer')->exists(), 404);
         $proof = $payment->proofs()->latest('id')->firstOrFail();
         abort_unless(Storage::disk('local')->exists($proof->path), 404);
-        return Storage::disk('local')->response($proof->path, 'qris-proof-'.$proof->id, ['Content-Type' => $proof->mime_type, 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store']);
+        return Storage::disk('local')->response($proof->path, 'qris-proof-'.$proof->id, [
+            'Content-Type' => $proof->mime_type,
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control' => 'private, no-store',
+        ]);
     }
 }

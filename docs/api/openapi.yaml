@@ -3,7 +3,7 @@ info:
   title: Cafe Exito API
   version: 1.0.0
   description: >-
-    Kontrak ini dicocokkan ulang ke 79 operasi hasil Artisan route:list pada 20 November 2026.
+    Kontrak ini mencakup 81 operasi API setelah penambahan bukti pembayaran QRIS pada 20 November 2026.
     Path relatif terhadap /api/v1. Fitur inventori, stok bahan, supplier, pembelian,
     dan laporan pemakaian stok dikecualikan sesuai keputusan final klien. Pembayaran POS,
     pembatalan kuantitas, dan refund mengikuti aturan terbaru di API_DOCUMENTATION.md.
@@ -113,24 +113,6 @@ paths:
       security: []
       parameters: [{ name: publicToken, in: path, required: true, schema: { type: string } }]
       responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' } }
-  /customer/orders/{publicToken}/payment-proof:
-    post:
-      operationId: uploadCustomerPaymentProof
-      x-required-middleware: throttle:customer-proof
-      parameters:
-        - { name: publicToken, in: path, required: true, schema: { type: string } }
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [proof]
-              properties:
-                proof: { type: string, format: binary, description: JPEG PNG or WEBP, max size 3 MB }
-      responses:
-        '201': { description: Bukti diterima menunggu verifikasi }
-        '422': { description: File atau status order tidak valid }
   /customer/orders/{publicToken}/cancel:
     post:
       tags: [Customer]
@@ -153,6 +135,26 @@ paths:
                 qty: { type: integer, minimum: 1 }
                 reason: { type: string, minLength: 1, maxLength: 500 }
       responses: { '200': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } }
+  /customer/orders/{publicToken}/payment-proof:
+    post:
+      tags: [Customer]
+      operationId: uploadCustomerQrisProof
+      security: []
+      description: >-
+        Customer uploads a private JPEG, PNG, or WEBP file (maximum 3 MB). Upload does not
+        settle payment. Cashier must manually inspect the proof and verify the QRIS payment.
+      x-required-middleware: throttle:customer-proof
+      parameters: [{ name: publicToken, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [proof]
+              properties:
+                proof: { type: string, format: binary, description: JPEG PNG or WEBP, max size 3 MB }
+      responses: { '201': { $ref: '#/components/responses/Ok' }, '404': { $ref: '#/components/responses/NotFound' }, '422': { $ref: '#/components/responses/ValidationError' } }
   /attendance/today-status:
     get:
       tags: [Attendance]
@@ -254,7 +256,7 @@ paths:
       x-required-middleware: 'App\Http\Middleware\EnsurePermission:payments.verify'
       parameters: [{ $ref: '#/components/parameters/OrderId' }]
       description: Marks the order complete after all tickets finish; this does not settle a pending payment.
-      responses: { '200': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/Conflict' } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } }
   /cashier/payments/{payment}/verify:
     post:
       tags: [Cashier]
@@ -263,7 +265,8 @@ paths:
         Cashier records settlement and manual verification. QRIS is static and has no gateway
         integration. Cash remains pending until this endpoint is called. It may be called after
         order completion; payment becomes verified while order status remains selesai. For
-        cash, amount_received is optional and defaults to the exact payment amount.
+        cash, amount_received is optional and defaults to the exact payment amount. QRIS Self-Order
+        cannot change its selected payment method and requires a pending customer proof before verify.
       x-required-middleware: 'App\Http\Middleware\EnsurePermission:payments.verify'
       parameters: [{ name: payment, in: path, required: true, schema: { type: integer } }]
       requestBody: { $ref: '#/components/requestBodies/VerifyPayment' }
@@ -275,21 +278,18 @@ paths:
       x-required-middleware: 'App\Http\Middleware\EnsurePermission:payments.verify'
       parameters: [{ name: payment, in: path, required: true, schema: { type: integer } }]
       requestBody: { $ref: '#/components/requestBodies/RejectPayment' }
-      responses: { '200': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/Conflict' } }
+      responses: { '200': { $ref: '#/components/responses/Ok' }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/ValidationError' } }
   /cashier/payments/{payment}/proof:
     get:
-      operationId: getCustomerPaymentProof
-      x-required-middleware: permission:payments.verify
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: payment, in: path, required: true, schema: { type: integer } }
+      tags: [Cashier]
+      operationId: getCustomerQrisProof
+      x-required-middleware: 'App\\Http\\Middleware\\EnsurePermission:payments.verify'
+      parameters: [{ name: payment, in: path, required: true, schema: { type: integer } }]
       responses:
-        '200':
-          description: Bukti QRIS privat untuk Kasir
-          content:
-            image/*: { schema: { type: string, format: binary } }
-        '403': { description: Tidak memiliki izin verifikasi payment }
-        '404': { description: Bukti tidak ditemukan }
+        '200': { description: Private image proof, headers: { Cache-Control: { schema: { type: string } }, X-Content-Type-Options: { schema: { type: string } } }, content: { image/jpeg: { schema: { type: string, format: binary } }, image/png: { schema: { type: string, format: binary } }, image/webp: { schema: { type: string, format: binary } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /cashier/transactions/{order}/receipt:
     get:
       tags: [Cashier]
@@ -644,6 +644,9 @@ paths:
     get:
       tags: [Reports]
       operationId: getSalesReport
+      description: >-
+        Sales summary totals include orders, revenue, average_order, items, refunds_approved and
+        refunds_completed. Refund values are integer rupiah amounts.
       x-required-middleware: 'App\Http\Middleware\EnsurePermission:reports.view'
       parameters:
         - { name: period, in: query, schema: { type: string, enum: [daily, weekly, monthly] } }
@@ -726,11 +729,152 @@ components:
       required: false
       content: { application/json: { schema: { $ref: '#/components/schemas/VerifyPayment' } } }
     RejectPayment:
-      required: false
+      required: true
       content: { application/json: { schema: { $ref: '#/components/schemas/RejectPayment' } } }
     CancelOrder:
       required: true
       content: { application/json: { schema: { $ref: '#/components/schemas/CancelOrder' } } }
+    AttendanceEvent:
+      required: true
+      content:
+        multipart/form-data:
+          schema:
+            type: object
+            required: [photo, latitude, longitude]
+            properties:
+              photo: { type: string, format: binary, description: JPEG, PNG, atau WebP; maksimum 2 MB }
+              latitude: { type: number, minimum: -90, maximum: 90 }
+              longitude: { type: number, minimum: -180, maximum: 180 }
+              accuracy_meters: { type: [number, 'null'], minimum: 0, maximum: 100000 }
+              device_info: { type: [string, 'null'] }
+              notes: { type: [string, 'null'] }
+  responses:
+    Ok:
+      description: Operasi berhasil
+      content: { application/json: { schema: { $ref: '#/components/schemas/Success' } } }
+    Unauthorized:
+      description: Token tidak ada atau tidak valid
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Pengguna tidak memiliki izin
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Resource tidak ditemukan
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: Konflik status bisnis
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    ValidationError:
+      description: Data tidak lolos validasi
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    AttendanceCorrection:
+      type: object
+      required: [reason]
+      properties:
+        check_in_at: { type: [string, 'null'], format: date-time }
+        check_out_at: { type: [string, 'null'], format: date-time }
+        status: { type: string, enum: [present, absent, sick, leave] }
+        notes: { type: [string, 'null'], maxLength: 2000 }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+    SaveMenu:
+      type: object
+      required: [name, category_id, price]
+      properties:
+        name: { type: string, maxLength: 120 }
+        sku: { type: [string, 'null'], maxLength: 30 }
+        category_id: { type: integer }
+        price: { type: integer, minimum: 0 }
+        cost_price: { type: [integer, 'null'], minimum: 0 }
+        station: { type: [string, 'null'], enum: [barista, kitchen, 'null'] }
+        image: { type: string, format: binary }
+    SaveTable:
+      type: object
+      required: [table_number]
+      properties:
+        table_number: { type: string, maxLength: 10 }
+        status: { type: [string, 'null'], enum: [active, inactive, 'null'] }
+    CreateStaffUser:
+      type: object
+      required: [name, username, email, role, password]
+      properties:
+        name: { type: string, maxLength: 100 }
+        username: { type: string, maxLength: 50, pattern: '^[a-z0-9._]+$' }
+        email: { type: string, format: email, maxLength: 150 }
+        role: { type: string, enum: [manager, kasir, barista_kitchen] }
+        station: { type: string, enum: [barista, kitchen], description: Required for role barista_kitchen }
+        password: { type: string, minLength: 8, maxLength: 100 }
+    UpdateStaffUser:
+      type: object
+      properties:
+        name: { type: string, maxLength: 100 }
+        username: { type: string, maxLength: 50, pattern: '^[a-z0-9._]+$' }
+        email: { type: string, format: email, maxLength: 150 }
+        role: { type: string, enum: [manager, kasir, barista_kitchen] }
+        station: { type: string, enum: [barista, kitchen], description: Required when changing/assigning barista_kitchen }
+    UpdateProfile:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 100 }
+        email: { type: string, format: email, maxLength: 150 }
+    ChangePassword:
+      type: object
+      required: [current_password, password]
+      properties:
+        current_password: { type: string }
+        password: { type: string, minLength: 8, maxLength: 100, description: Must differ from current_password }
+    CartItems:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/CartItem' }
+    CartItem:
+      type: object
+      required: [menu_id, qty]
+      properties:
+        menu_id: { type: integer }
+        qty: { type: integer, minimum: 1 }
+    CustomerOrder:
+      allOf:
+        - $ref: '#/components/schemas/CartItems'
+        - type: object
+          required: [payment_method]
+          properties:
+            table_number: { type: [string, 'null'], maxLength: 10 }
+            service_type: { type: string, enum: [dine_in, takeaway] }
+            customer_name: { type: [string, 'null'], maxLength: 100 }
+            payment_method: { type: string, enum: [tunai, qris] }
+            client_request_id: { type: [string, 'null'], format: uuid }
+    PosOrder:
+      allOf:
+        - $ref: '#/components/schemas/CartItems'
+        - type: object
+          required: [client_request_id, service_type, payment_method]
+          properties:
+            client_request_id: { type: string, format: uuid }
+            service_type: { type: string, enum: [dine_in, takeaway] }
+            table_number: { type: [string, 'null'], maxLength: 10 }
+            customer_name: { type: [string, 'null'], maxLength: 100 }
+            payment_method: { type: string, enum: [tunai, qris] }
+    VerifyPayment:
+      type: object
+      properties:
+        method: { type: [string, 'null'], enum: [tunai, qris, 'null'] }
+        amount_received: { type: [integer, 'null'], minimum: 0 }
+    RejectPayment:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 255 }
+    CancelOrder:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 500 }
     Success:
       type: object
       required: [success, message, data, meta]

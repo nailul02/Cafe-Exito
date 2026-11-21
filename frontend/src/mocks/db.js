@@ -1,17 +1,15 @@
 import { ApiError } from '../api/ApiError'
-import { USERS, CATEGORIES, INGREDIENTS, MENUS, SUPPLIERS, TABLES, PERMISSION_DEFAULTS } from './seed'
+import { USERS, CATEGORIES, MENUS, TABLES, PERMISSION_DEFAULTS } from './seed'
 
 const KEY = 'exito.mockdb.v4'
 export const wait = (ms = 140) => new Promise((r) => setTimeout(r, ms + Math.random() * 100))
-export const cafeDate = (value = new Date()) => {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(value)
-  const fields = Object.fromEntries(parts.map(({ type, value: part }) => [type, part]))
-  return `${fields.year}-${fields.month}-${fields.day}`
-}
 const now = () => new Date().toISOString()
 const minutesAgo = (m) => new Date(Date.now() - m * 60000).toISOString()
+export const jakartaDate = (value) => {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value instanceof Date ? value : new Date(value))
+  const dateParts = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map(({ type, value: partValue }) => [type, partValue]))
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}`
+}
 export const label = (code, map) => ({ code, label: map[code] || code })
 export const LABELS = {
   order: { menunggu_pembayaran: 'Menunggu Pembayaran', dibayar: 'Dibayar', diproses: 'Diproses', selesai: 'Selesai', dibatalkan: 'Dibatalkan' },
@@ -33,9 +31,9 @@ export function buildSeed() {
     seq: { order: 0, payment: 0, ticket: 0, movement: 0, detail: 0, purchase: 0, receipt: 0, supplier: 3, user: 5, table: 12, ingredient: 12, menu: 13, attendance: 0 },
     users: USERS.map((u) => ({ ...u, password: 'password', extra_permissions: [] })),
     categories: CATEGORIES, tables: TABLES.map((t) => ({ ...t })),
-    ingredients: INGREDIENTS.map((i) => ({ ...i, is_active: true })),
+    ingredients: [],
     menus: MENUS.map((m) => ({ ...m, station: CATEGORIES.find((c) => c.id === m.category_id).station, cost_price: null })),
-    suppliers: SUPPLIERS.map((x) => ({ ...x })),
+    suppliers: [],
     orders: [], payments: [], tickets: [], details: [], movements: [], purchases: [], receipts: [], audit: [],
     attendances: [],
     settings: { cafe_name: 'Cafe Exito', cafe_address: 'Jl. Balai Gadang, Koto Tangah, Padang', qris_image_url: '/coffee.png', receipt_footer: 'Terima kasih atas kunjungan Anda di Cafe Éxito!' },
@@ -55,9 +53,9 @@ export function buildSeed() {
   // Pesanan hari ini dengan beragam status.
   const mk = (table, items, method, minutes) => createOrderIn(s, { table, items, method, at: minutesAgo(minutes), cashier: 3 })
   const a = mk(4, [[1, 1]], 'tunai', 3) // menunggu bayar
-  const b = mk(5, [[1, 2], [2, 1]], 'qris', 9); verifyIn(s, b.payment.id, 3, {}, undefined, false) // antre barista
+  const b = mk(5, [[1, 2], [2, 1]], 'qris', 9); b.payment.proof = { status: 'pending', uploaded_at: b.order.ordered_at, preview_available: false }; verifyIn(s, b.payment.id, 3, {}, undefined, false) // antre barista
   const c = mk(2, [[3, 1], [7, 2]], 'tunai', 16); verifyIn(s, c.payment.id, 3, {}, undefined, false); startIn(s, tk(s, c.order.id, 'barista').id, 4) // diproses
-  const d2 = mk(7, [[4, 1], [9, 1]], 'qris', 22); verifyIn(s, d2.payment.id, 3, {}, undefined, false) // campuran
+  const d2 = mk(7, [[4, 1], [9, 1]], 'qris', 22); d2.payment.proof = { status: 'pending', uploaded_at: d2.order.ordered_at, preview_available: false }; verifyIn(s, d2.payment.id, 3, {}, undefined, false) // campuran
   startIn(s, tk(s, d2.order.id, 'kitchen').id, 5)
   const e = mk(9, [[12, 1], [8, 1]], 'tunai', 40); verifyIn(s, e.payment.id, 3, {}, undefined, false)
   startIn(s, tk(s, e.order.id, 'kitchen').id, 5); completeIn(s, tk(s, e.order.id, 'kitchen').id, 5)
@@ -83,7 +81,7 @@ export function buildSeed() {
     s.attendances.push({
       id: s.seq.attendance,
       user_id: userId,
-      attendance_date: cafeDate(new Date(checkInAt)),
+      attendance_date: jakartaDate(checkInAt),
       status: 'present',
       check_in_at: checkInAt,
       check_out_at: null,
@@ -95,10 +93,6 @@ export function buildSeed() {
   const mgrMorning = new Date(); mgrMorning.setHours(7, 45, 0, 0)
   seedAttend(2, mgrMorning.toISOString())
 
-  s.purchases.push(
-    { id: 1, purchase_number: 'PO-20261028-001', supplier_id: 1, status: 'dipesan', ordered_at: minutesAgo(3000), note: null, details: [{ id: 1, ingredient_id: 1, qty_ordered: 10000, qty_received: 0, unit_price: 190 }] },
-  )
-  s.seq.purchase = 1; s.seq.receipt = 0
   return s
 }
 const tk = (s, orderId, station) => s.tickets.find((t) => t.order_id === orderId && t.station === station)
@@ -119,7 +113,7 @@ export function load() {
         for (const event of s.attendances || []) {
           const timestamp = event.timestamp || event.check_in_at || event.check_out_at
           if (!timestamp) continue
-          const attendanceDate = cafeDate(new Date(timestamp))
+          const attendanceDate = jakartaDate(timestamp)
           const key = `${event.user_id}:${attendanceDate}`
           const record = daily.get(key) || {
             id: event.id,
@@ -170,15 +164,6 @@ export function menuIsOrderable(s, m) {
   return { ok: true, reason: null }
 }
 
-function createTicketsIn(s, orderId, at) {
-  const stations = new Set(s.details.filter((detail) => detail.order_id === orderId).map((detail) => detail.station))
-  for (const station of stations) {
-    if (s.tickets.some((ticket) => ticket.order_id === orderId && ticket.station === station)) continue
-    s.seq.ticket += 1
-    s.tickets.push({ id: s.seq.ticket, order_id: orderId, station, status: 'antre', started_at: null, ready_at: null, handled_by: null, updated_at: at })
-  }
-}
-
 export function createOrderIn(s, { table, items, method, at = now(), history = false, cashier = null, service_type = 'dine_in', order_source = 'qr_customer', customer_name = null }) {
   let tableId = null
   if (service_type === 'dine_in') {
@@ -205,7 +190,7 @@ export function createOrderIn(s, { table, items, method, at = now(), history = f
   })
   s.details.push(...lines)
   s.seq.payment += 1
-  const payment = { id: s.seq.payment, order_id: orderId, method, status: 'pending', amount: total, amount_received: null, paid_at: null, verified_by: null, transaction_number: null, reject_reason: null }
+  const payment = { id: s.seq.payment, order_id: orderId, method, status: 'pending', amount: total, amount_received: null, paid_at: null, verified_by: null, transaction_number: null, reject_reason: null, proof: history && method === 'qris' && order_source === 'qr_customer' ? { status: 'pending', reject_reason: null, uploaded_at: at, preview_available: false } : null }
   s.payments.push(payment)
   const order = {
     id: orderId,
@@ -224,7 +209,13 @@ export function createOrderIn(s, { table, items, method, at = now(), history = f
     cancel_reason: null,
   }
   s.orders.push(order)
-  if (method === 'tunai') createTicketsIn(s, orderId, at)
+  if (method === 'tunai') {
+    for (const station of ['barista', 'kitchen']) {
+      if (!lines.some((line) => line.station === station)) continue
+      s.seq.ticket += 1
+      s.tickets.push({ id: s.seq.ticket, order_id: orderId, station, status: 'antre', started_at: null, ready_at: null, handled_by: cashier, updated_at: at })
+    }
+  }
   if (history) {
     verifyIn(s, payment.id, cashier, {}, at, false)
     s.tickets.filter((t) => t.order_id === orderId).forEach((t) => { t.status = 'selesai'; t.started_at = at; t.ready_at = new Date(new Date(at).getTime() + (3 + (orderId % 4)) * 60000).toISOString() })
@@ -240,7 +231,7 @@ export function recordAttendanceIn(s, { userId, type, latitude, longitude, accur
     throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Tipe absensi tidak valid.' })
   }
   if (!s.attendances) s.attendances = []
-  const today = cafeDate()
+  const today = jakartaDate(new Date())
   let record = s.attendances.find((row) => row.user_id === u.id && row.attendance_date === today)
 
   if (type === 'check_in') {
@@ -279,21 +270,33 @@ export function recordAttendanceIn(s, { userId, type, latitude, longitude, accur
   return { ...record }
 }
 
-export function verifyIn(s, paymentId, userId, payload = {}, at = now()) {
+export function verifyIn(s, paymentId, userId, payload = {}, at = now(), consumeStock = true) {
   const p = s.payments.find((x) => x.id === paymentId)
   if (!p) throw new ApiError({ status: 404, code: 'NOT_FOUND', message: 'Pembayaran tidak ditemukan.' })
   if (p.status !== 'pending') throw new ApiError({ status: 409, code: 'PAYMENT_ALREADY_PROCESSED', message: 'Pembayaran sudah diproses.' })
   const order = s.orders.find((o) => o.id === p.order_id)
+  if (order.order_source === 'qr_customer' && payload.method && payload.method !== p.method) {
+    throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Metode pembayaran Self-Order tidak dapat diubah saat verifikasi.' })
+  }
+  if (order.order_source === 'qr_customer' && p.method === 'qris' && p.proof?.status !== 'pending') {
+    throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Bukti QRIS pelanggan yang menunggu verifikasi wajib tersedia.' })
+  }
   if (payload.method) p.method = payload.method
   if (p.method === 'tunai' && payload.amount_received != null && Number(payload.amount_received) < p.amount) {
     throw new ApiError({ status: 422, code: 'AMOUNT_TOO_LOW', message: 'Uang diterima kurang dari total tagihan.' })
   }
   p.amount_received = p.method === 'tunai' ? Number(payload.amount_received ?? p.amount) : null
   p.status = 'verified'; p.paid_at = at; p.verified_by = userId
-  if (p.proof) p.proof.status = 'verified'
+  if (p.proof?.status === 'pending') p.proof = { ...p.proof, status: 'verified', reject_reason: null }
   p.transaction_number = `TRX-${ymd(at)}-${pad(p.id)}`
-  const orderAlreadyCompleted = order.status === 'selesai'
-  if (!orderAlreadyCompleted) { order.status = 'dibayar'; order.paid_at = at; createTicketsIn(s, order.id, at) } else { order.paid_at = at }
+  order.status = 'dibayar'; order.paid_at = at
+  for (const station of ['barista', 'kitchen']) {
+    const lines = s.details.filter((d) => d.order_id === order.id && d.station === station)
+    if (!lines.length || s.tickets.some((ticket) => ticket.order_id === order.id && ticket.station === station)) continue
+    s.seq.ticket += 1
+    const ticket = { id: s.seq.ticket, order_id: order.id, station, status: 'antre', started_at: null, ready_at: null, handled_by: null, updated_at: at }
+    s.tickets.push(ticket)
+  }
   return p
 }
 
@@ -302,6 +305,9 @@ export function startIn(s, ticketId, userId) {
   if (!t) throw new ApiError({ status: 404, code: 'NOT_FOUND', message: 'Tiket tidak ditemukan.' })
   if (t.status !== 'antre') throw new ApiError({ status: 409, code: 'INVALID_STATE_TRANSITION', message: 'Tiket tidak bisa dimulai dari status ini.' })
   t.status = 'diproses'; t.started_at = now(); t.handled_by = userId; t.updated_at = now()
+  const order = s.orders.find((o) => o.id === t.order_id)
+  s.details.filter((d) => d.order_id === t.order_id && d.station === t.station && (d.qty_cancelled||0)<d.qty).forEach((d) => { d.started_at ||= t.started_at })
+  if (order.status === 'dibayar') order.status = 'diproses'
   return t
 }
 
@@ -310,12 +316,16 @@ export function completeIn(s, ticketId, userId) {
   if (!t) throw new ApiError({ status: 404, code: 'NOT_FOUND', message: 'Tiket tidak ditemukan.' })
   if (t.status !== 'diproses') throw new ApiError({ status: 409, code: 'INVALID_STATE_TRANSITION', message: 'Tiket belum diproses.' })
   t.status = 'selesai'; t.ready_at = now(); t.handled_by = t.handled_by || userId; t.updated_at = now()
+  const order = s.orders.find((o) => o.id === t.order_id)
+  const open = s.tickets.filter((x) => x.order_id === order.id && !['selesai', 'dibatalkan'].includes(x.status))
+  if (!open.length) { order.status = 'selesai'; order.completed_at = now() }
   return t
 }
 
 export const permissionsOf = (u) => {
   const normRole = u.role === 'admin' ? 'manager' : u.role
-  const permissions = [...new Set([...(PERMISSION_DEFAULTS[normRole] || PERMISSION_DEFAULTS[u.role] || []), ...(u.extra_permissions || [])])]
+  const retired = /^(ingredients\.|purchases\.|stock\.|recipes\.|suppliers\.)/
+  const permissions = [...new Set([...(PERMISSION_DEFAULTS[normRole] || PERMISSION_DEFAULTS[u.role] || []), ...(u.extra_permissions || [])])].filter((p) => !retired.test(p))
   return normRole === 'barista_kitchen' ? permissions.filter((p) => !p.startsWith('queue.') || p === `queue.${u.station}`) : permissions
 }
 export const publicUser = (u) => {

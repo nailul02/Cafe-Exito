@@ -3,11 +3,12 @@
 import { ApiError } from '../api/ApiError'
 import { tokenStorage } from '../api/tokenStorage'
 import { GRANTABLE, PERMISSION_DEFAULTS } from './seed'
-import { LABELS, label, load, save, wait, menuIsOrderable, createOrderIn, verifyIn, startIn, completeIn, permissionsOf, publicUser, recordAttendanceIn, cafeDate } from './db'
+import { LABELS, label, load, save, wait, menuIsOrderable, createOrderIn, verifyIn, startIn, completeIn, permissionsOf, publicUser, recordAttendanceIn, jakartaDate } from './db'
 
 export { resetMock } from './db'
 
 const SESSION = 'exito.mock.user'
+const mockPaymentProofFiles = new Map()
 const currentUser = () => {
   const id = Number(sessionStorage.getItem(SESSION))
   const s = load()
@@ -19,19 +20,14 @@ const notFound = (what = 'Data') => new ApiError({ status: 404, code: 'NOT_FOUND
 const forbid = () => new ApiError({ status: 403, code: 'FORBIDDEN', message: 'Anda tidak memiliki izin untuk aksi ini.' })
 const can = (u, perm) => permissionsOf(u).includes(perm)
 const need = (u, perm) => { if (!can(u, perm)) throw forbid() }
-const sameDay = (iso, d = new Date()) => new Date(iso).toDateString() === d.toDateString()
+const retiredOperationalFeature = (name) => new ApiError({ status: 404, code: 'NOT_FOUND', message: `Fitur ${name} tidak aktif dalam scope operasional.` })
+const sameDay = (iso, d = new Date()) => iso != null && jakartaDate(iso) === jakartaDate(d)
 const pct = (v, total) => (total ? Math.round((v / total) * 1000) / 10 : 0)
 
 // ---------- Serializer ----------
-const stockLevel = (i) => {
-  if (i.stock <= 0) return 'habis'
-  const r = i.stock / (i.min_stock || 1)
-  return r <= 0.5 ? 'kritis' : r <= 1 ? 'menipis' : 'aman'
-}
-const ingredientOut = (i) => ({ id: i.id, name: i.name, category: i.category, unit: i.unit, stock: i.stock, min_stock: i.min_stock, stock_percent: Math.round((i.stock / (i.min_stock || 1)) * 100), level: label(stockLevel(i), { aman: 'Aman', menipis: 'Menipis', kritis: 'Kritis', habis: 'Habis' }), is_active: i.is_active })
 const userName = (s, id) => s.users.find((u) => u.id === id)?.name ?? null
 const tableOf = (s, o) => (o.table_id ? s.tables.find((t) => t.id === o.table_id) : null)
-const paymentOut = (s, p) => p && ({ id: p.id, method: label(p.method, { tunai: 'Tunai', qris: 'QRIS' }), status: label(p.status, LABELS.payment), amount: p.amount, amount_received: p.amount_received, change: p.amount_received != null ? p.amount_received - p.amount : null, paid_at: p.paid_at, verified_by: userName(s, p.verified_by), transaction_number: p.transaction_number, reject_reason: p.reject_reason, proof: p.proof ? { status: p.proof.status, reject_reason: p.proof.reject_reason, uploaded_at: p.proof.uploaded_at, preview_available: true } : null, previous_rejection: p.previous_rejection || null })
+const paymentOut = (s, p) => p && ({ id: p.id, method: label(p.method, { tunai: 'Tunai', qris: 'QRIS' }), status: label(p.status, LABELS.payment), amount: p.amount, amount_received: p.amount_received, change: p.amount_received != null ? p.amount_received - p.amount : null, paid_at: p.paid_at, verified_by: userName(s, p.verified_by), transaction_number: p.transaction_number, proof: p.proof ? { ...p.proof, preview_available: mockPaymentProofFiles.has(p.id) } : null })
 const orderOut = (s, o) => {
   const p = s.payments.filter((x) => x.order_id === o.id).slice(-1)[0]
   const tbl = tableOf(s, o)
@@ -109,15 +105,6 @@ export const customerApi = {
     save(s); return orderOut(s, order)
   },
   async order(publicToken) { await wait(60); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); if (!o) throw notFound('Pesanan'); return orderOut(s, o) },
-  async uploadPaymentProof(publicToken, file) {
-    await wait(); const s = load(); const order = s.orders.find((x) => x.public_token === publicToken); if (!order) throw notFound('Pesanan')
-    if (!file || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 3 * 1024 * 1024) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Pilih gambar JPEG, PNG, atau WEBP maksimal 3 MB.' })
-    if (order.order_source !== 'qr_customer' || order.status !== 'menunggu_pembayaran') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Pesanan tidak menerima bukti QRIS.' })
-    let payment = s.payments.filter((p) => p.order_id === order.id).slice(-1)[0]
-    if (payment.status === 'rejected') { const previous = payment.proof; payment = { ...payment, id: ++s.seq.payment, status: 'pending', reject_reason: null, paid_at: null, verified_by: null, transaction_number: null, proof: null, previous_rejection: previous ? { reason: previous.reject_reason, uploaded_at: previous.uploaded_at } : null }; s.payments.push(payment) }
-    if (payment.proof?.status === 'pending') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Bukti sedang menunggu verifikasi kasir.' })
-    payment.proof = { status: 'pending', reject_reason: null, uploaded_at: new Date().toISOString() }; save(s); return { status: 'pending', uploaded_at: payment.proof.uploaded_at, mime_type: file.type, size_bytes: file.size }
-  },
   async cancelOrder(publicToken, payload = {}) {
     await wait(); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); if (!o) throw notFound('Pesanan')
     const d = s.details.find((x) => x.id === Number(payload.detail_id) && x.order_id === o.id); if (!d) throw notFound('Item pesanan')
@@ -132,38 +119,57 @@ export const customerApi = {
     if (s.details.filter((x) => x.order_id === o.id).every((x) => x.qty_cancelled >= x.qty)) { o.status = 'dibatalkan'; o.cancel_reason = payload.reason.trim(); if (p?.status === 'pending') p.status = 'cancelled'; s.tickets.filter((t) => t.order_id === o.id && t.status === 'antre').forEach((t) => { t.status = 'dibatalkan' }) }
     save(s); return orderOut(s, o)
   },
-  async paymentInfo() { await wait(60); const s = load(); return { cafe_name: s.settings.cafe_name, qris_image_url: s.settings.qris_image_url, instructions: { qris: 'Bayar dengan QRIS statis. Setelah pesanan dibuat, unggah bukti pembayaran melalui halaman status pesanan. Pesanan diproses setelah kasir memverifikasi bukti.', tunai: 'Bayar tunai di kasir. Pesanan diproses setelah kasir memverifikasi.' } } },
+  async uploadPaymentProof(publicToken, file) {
+    await wait(); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); if (!o) throw notFound('Pesanan')
+    if (o.order_source !== 'qr_customer' || o.status !== 'menunggu_pembayaran') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Bukti hanya dapat diunggah untuk QR Self-Order yang menunggu pembayaran.' })
+    if (!file || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 3 * 1024 * 1024) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Pilih gambar JPEG, PNG, atau WEBP maksimal 3 MB.' })
+    const payments = s.payments.filter((x) => x.order_id === o.id); let p = payments.at(-1)
+    if (p?.status === 'rejected' && p.method === 'qris') {
+      s.seq.payment += 1
+      p = { id: s.seq.payment, order_id: o.id, method: 'qris', status: 'pending', amount: p.amount, amount_received: null, paid_at: null, verified_by: null, transaction_number: null, reject_reason: null, proof: null }
+      s.payments.push(p)
+    }
+    if (!p || p.method !== 'qris' || p.status !== 'pending' || p.proof?.status === 'pending') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Pembayaran belum siap menerima bukti baru.' })
+    p.proof = { status: 'pending', reject_reason: null, uploaded_at: new Date().toISOString(), preview_available: false }
+    mockPaymentProofFiles.set(p.id, file)
+    p.proof.preview_available = true
+    save(s); return { status: p.proof.status, uploaded_at: p.proof.uploaded_at, mime_type: file.type, size_bytes: file.size }
+  },
+  async paymentInfo() { await wait(60); const s = load(); return { cafe_name: s.settings.cafe_name, qris_image_url: s.settings.qris_image_url, instructions: { qris: 'Scan QRIS di kasir atau bayar lalu tunjukkan bukti ke kasir. Pesanan diproses setelah kasir memverifikasi.', tunai: 'Bayar tunai di kasir. Pesanan diproses setelah kasir memverifikasi.' } } },
 }
 
 // ---------- Kasir ----------
 export const cashierApi = {
-  async dashboard() { await wait(); need(currentUser(), 'dashboard.cashier'); const s = load(); const today = s.orders.filter((o) => sameDay(o.ordered_at)); return { new_orders: today.filter((o) => ['menunggu_pembayaran', 'dibayar'].includes(o.status)).length, awaiting_payment: s.payments.filter((p) => p.status === 'pending').length, orders_today: today.length, revenue_today: s.payments.filter((p) => p.status === 'verified' && sameDay(p.paid_at)).reduce((a, p) => a + p.amount, 0) } },
+  async dashboard() { await wait(); need(currentUser(), 'dashboard.cashier'); const s = load(); const today = s.orders.filter((o) => sameDay(o.ordered_at)); return { new_orders: today.filter((o) => ['menunggu_pembayaran', 'dibayar'].includes(o.status)).length, awaiting_payment: s.orders.filter((o) => o.status === 'menunggu_pembayaran').length, orders_today: today.length, revenue_today: s.payments.filter((p) => p.status === 'verified' && sameDay(p.paid_at)).reduce((a, p) => a + p.amount, 0) } },
   async orders(params = {}) {
     await wait(); need(currentUser(), 'payments.verify'); const s = load(); const st = params['filter[status]']; const q = (params.search || '').toLowerCase()
-    return s.orders.filter((o) => sameDay(o.ordered_at) && (!st || st === 'semua' || (st === 'menunggu_pembayaran' ? s.payments.some((p) => p.order_id === o.id && p.status === 'pending') : o.status === st)) && (!q || o.order_number.toLowerCase().includes(q) || o.display_number.includes(q))).sort((a, b) => b.id - a.id).map((o) => orderOut(s, o))
+    return s.orders.filter((o) => sameDay(o.ordered_at) && (!st || st === 'semua' || o.status === st) && (!q || o.order_number.toLowerCase().includes(q) || o.display_number.includes(q))).sort((a, b) => b.id - a.id).map((o) => orderOut(s, o))
   },
-  async completeOrder(id) {
-    await wait(); need(currentUser(), 'payments.verify'); const s = load(); const order = s.orders.find((x) => x.id === Number(id));
-    if (!order) throw notFound('Pesanan')
-    const tickets = s.tickets.filter((ticket) => ticket.order_id === order.id)
-    if (!tickets.length || tickets.some((ticket) => ticket.status !== 'selesai')) throw new ApiError({ status: 409, code: 'INVALID_STATE_TRANSITION', message: 'Pesanan hanya dapat diselesaikan setelah semua tiket produksi selesai.' })
-    order.status = 'selesai'; order.completed_at = new Date().toISOString(); save(s); return orderOut(s, order)
-  },  async order(id) { await wait(60); const s = load(); const o = s.orders.find((x) => x.id === Number(id)); if (!o) throw notFound('Pesanan'); return orderOut(s, o) },
-  async verify(paymentId, payload = {}) { await wait(); const u = currentUser(); need(u, 'payments.verify'); const s = load(); const p = s.payments.find((x) => x.id === Number(paymentId)); const o = p && s.orders.find((x) => x.id === p.order_id); if (p?.method === 'qris' && o?.order_source === 'qr_customer' && p.proof?.status !== 'pending') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Bukti QRIS pelanggan harus tersedia.' }); const verified = verifyIn(s, Number(paymentId), u.id, payload); save(s); return orderOut(s, s.orders.find((o) => o.id === verified.order_id)) },
+  async order(id) { await wait(60); const s = load(); const o = s.orders.find((x) => x.id === Number(id)); if (!o) throw notFound('Pesanan'); return orderOut(s, o) },
+  async paymentProof(paymentId) { await wait(); need(currentUser(), 'payments.verify'); const file = mockPaymentProofFiles.get(Number(paymentId)); if (!file) throw notFound('Bukti pembayaran'); return file },
+  async verify(paymentId, payload = {}) { await wait(); const u = currentUser(); need(u, 'payments.verify'); const s = load(); const p = verifyIn(s, Number(paymentId), u.id, payload); save(s); return orderOut(s, s.orders.find((o) => o.id === p.order_id)) },
   async reject(paymentId, payload = {}) {
     await wait(); need(currentUser(), 'payments.verify'); const s = load(); const p = s.payments.find((x) => x.id === Number(paymentId)); if (!p) throw notFound('Pembayaran')
     if (p.status !== 'pending') throw new ApiError({ status: 409, code: 'PAYMENT_ALREADY_PROCESSED', message: 'Pembayaran sudah diproses.' })
-    if (!payload.reason?.trim()) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Alasan penolakan wajib diisi.' })
-    p.status = 'rejected'; p.reject_reason = payload.reason.trim(); if (p.proof) { p.proof.status = 'rejected'; p.proof.reject_reason = p.reject_reason }; save(s); return orderOut(s, s.orders.find((x) => x.id === p.order_id))
+    if (!String(payload.reason || '').trim()) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Alasan penolakan wajib diisi.' })
+    const o = s.orders.find((x) => x.id === p.order_id)
+    if (p.method === 'tunai') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Pembayaran tunai tetap menunggu pelunasan.' })
+    if (o.order_source === 'qr_customer') {
+      if (p.method !== 'qris' || !p.proof || p.proof.status !== 'pending') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Tidak ada bukti pelanggan yang menunggu verifikasi.' })
+      p.proof = { ...p.proof, status: 'rejected', reject_reason: payload.reason.trim() }
+    }
+    p.status = 'rejected'; p.reject_reason = payload.reason.trim()
+    if (o.order_source !== 'qr_customer') { o.status = 'dibatalkan'; o.cancel_reason = p.reject_reason }
+    save(s); return orderOut(s, o)
   },
-  async paymentProof(paymentId) { await wait(); need(currentUser(), 'payments.verify'); const s = load(); const p = s.payments.find((x) => x.id === Number(paymentId)); if (!p?.proof) throw notFound('Bukti pembayaran'); return new Blob(['mock qris proof'], { type: 'image/png' }) },
   async receipt(orderId) {
     await wait(); const s = load(); const o = s.orders.find((x) => x.id === Number(orderId)); if (!o) throw notFound('Pesanan'); const p = s.payments.filter((x) => x.order_id === o.id).slice(-1)[0]
     return { cafe: { name: s.settings.cafe_name, address: s.settings.cafe_address, footer: s.settings.receipt_footer }, transaction_number: p.transaction_number, order: orderOut(s, o), cashier: userName(s, p.verified_by) }
   },
   async createPosOrder(payload) {
     await wait(); const u = currentUser(); need(u, 'orders.create_pos'); const s = load()
-    const { service_type = 'dine_in', table_number, customer_name, payment_method = 'tunai', items } = payload
+    const { service_type = 'dine_in', table_number, customer_name, payment_method = 'tunai', amount_received, items } = payload
+    if (amount_received != null) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Uang diterima dicatat setelah pesanan dibuat.' })
     if (!items || !items.length) {
       throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Item pesanan tidak boleh kosong.' })
     }
@@ -176,9 +182,6 @@ export const cashierApi = {
       method: payment_method,
       cashier: u.id,
     })
-    if (payment_method === 'tunai') {
-      createTicketsIn(s, order.id, now())
-    }
     save(s)
     return orderOut(s, s.orders.find((o) => o.id === order.id))
   },
@@ -191,10 +194,10 @@ export const cashierApi = {
 export const refundsApi = {
   async list(){await wait();const u=currentUser();if(!can(u,'refund.view')&&!can(u,'refund.review'))throw forbid();const s=load();return s.refundRequests||[]},
   async request(payload){await wait();const u=currentUser();need(u,'refund.request');const s=load();const p=s.payments.find(x=>x.id===Number(payload.payment_id));if(!p||p.status!=='verified')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Pembayaran harus verified.'});s.refundRequests||=[];const r={id:Date.now(),payment_id:p.id,order_id:p.order_id,amount:Number(payload.amount),reason:payload.reason,status:'requested',source:'manual',requested_by:u.id};s.refundRequests.push(r);save(s);return r},
-  async decide(id,decision,reason){await wait();const u=currentUser();need(u,'refund.review');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r)throw notFound('Refund');if(r.status!=='requested')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Pengajuan bukan menunggu keputusan.'});r.status=decision;r.decision_reason=reason;save(s);return r},
+  async decide(id,decision,reason){await wait();const u=currentUser();need(u,'refund.review');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r)throw notFound('Refund');if(r.status!=='requested')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Pengajuan bukan menunggu keputusan.'});r.status=decision;r.decided_at=new Date().toISOString();r.decision_reason=reason;save(s);return r},
   async withdraw(id,reason){await wait();const u=currentUser();need(u,'refund.view');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='requested')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Tidak dapat ditarik.'});r.status='withdrawn';r.withdraw_reason=reason;save(s);return r},
   async revoke(id,reason){await wait();const u=currentUser();need(u,'refund.review');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='approved')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Tidak dapat dicabut.'});r.status='approval_revoked';r.approval_revoke_reason=reason;save(s);return r},
-  async execute(id,payload){await wait();const u=currentUser();need(u,'refund.execute');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='approved')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Belum disetujui.'});r.status='completed';r.executed_by=u.id;r.method=payload.get('method');save(s);return r},
+  async execute(id,payload){await wait();const u=currentUser();need(u,'refund.execute');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='approved')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Belum disetujui.'});r.status='completed';r.completed_at=new Date().toISOString();r.executed_by=u.id;r.method=payload.get('method');save(s);return r},
   async notifications(){await wait();return []}, async readNotification(){return null},
   async conflictNote(id,data){await wait();const u=currentUser();need(u,'refund.conflict.document');const s=load();const r=(s.refundRequests||[]).find(x=>x.id===Number(id));if(!r||r.status!=='conflict_of_interest')throw new ApiError({status:409,code:'INVALID_REFUND_STATE',message:'Bukan konflik kepentingan.'});r.conflict_note=data;r.verified=u.role==='owner';save(s);return r},
   async verifyConflict(id){await wait();need(currentUser(),'refund.review');return {id:Number(id),verified:true}},
@@ -253,72 +256,40 @@ export const stationApi = {
 export const menusApi = {
   async list(params = {}) { await wait(); need(currentUser(), 'menus.view'); const s = load(); const q = (params.search || '').toLowerCase(); return s.menus.filter((m) => !q || m.name.toLowerCase().includes(q) || m.sku.toLowerCase().includes(q)).map((m) => menuAdmin(s, m)) },
   async show(id) { await wait(60); const s = load(); const m = s.menus.find((x) => x.id === Number(id)); if (!m) throw notFound('Menu'); return menuAdmin(s, m) },
-  async create(p) { await wait(); need(currentUser(), 'menus.manage'); const s = load(); const cat = s.categories.find((c) => c.id === Number(p.category_id)); s.seq.menu += 1; const m = { id: s.seq.menu, sku: p.sku || `NEW-${s.seq.menu}`, name: p.name, price: Number(p.price), category_id: cat.id, is_available: true, image: false, recipe: [], station: p.station || cat.station, cost_price: p.cost_price ?? null }; s.menus.push(m); save(s); return menuAdmin(s, m) },
+  async create(p) { await wait(); need(currentUser(), 'menus.manage'); const s = load(); const cat = s.categories.find((c) => c.id === Number(p.category_id)); s.seq.menu += 1; const m = { id: s.seq.menu, sku: p.sku || `NEW-${s.seq.menu}`, name: p.name, price: Number(p.price), category_id: cat.id, is_available: true, image: false, station: p.station || cat.station, cost_price: p.cost_price ?? null }; s.menus.push(m); save(s); return menuAdmin(s, m) },
   async update(id, p) { await wait(); need(currentUser(), 'menus.manage'); const s = load(); const m = s.menus.find((x) => x.id === Number(id)); if (!m) throw notFound('Menu'); Object.assign(m, { name: p.name ?? m.name, sku: p.sku ?? m.sku, price: p.price != null ? Number(p.price) : m.price, category_id: p.category_id ? Number(p.category_id) : m.category_id, station: p.station ?? m.station, cost_price: p.cost_price ?? m.cost_price }); save(s); return menuAdmin(s, m) },
   async remove(id) { await wait(); need(currentUser(), 'menus.manage'); const s = load(); s.menus = s.menus.filter((x) => x.id !== Number(id)); save(s); return null },
   async setAvailability(id, v) { await wait(80); need(currentUser(), 'menus.manage'); const s = load(); const m = s.menus.find((x) => x.id === Number(id)); if (!m) throw notFound('Menu'); m.is_available = !!v; save(s); return menuAdmin(s, m) },
+  async recipe() { throw retiredOperationalFeature('resep') },
+  async saveRecipe() { throw retiredOperationalFeature('resep') },
   async categories() { await wait(60); return load().categories },
 }
 
 // ---------- Inventori ----------
 export const inventoryApi = {
-  async ingredients(params = {}) { await wait(); need(currentUser(), 'ingredients.view'); const s = load(); const q = (params.search || '').toLowerCase(); return s.ingredients.filter((i) => i.is_active && (!params.category || i.category === params.category) && (!q || i.name.toLowerCase().includes(q)) && (!params.status || (params.status === 'low' ? ['menipis', 'kritis', 'habis'].includes(stockLevel(i)) : stockLevel(i) === params.status))).map(ingredientOut) },
-  async createIngredient(p) { await wait(); need(currentUser(), 'ingredients.manage'); const s = load(); s.seq.ingredient += 1; const i = { id: s.seq.ingredient, name: p.name, category: p.category || 'Bahan Makanan', unit: p.unit, stock: Number(p.stock || 0), min_stock: Number(p.min_stock || 0), is_active: true }; s.ingredients.push(i); save(s); return ingredientOut(i) },
-  async updateIngredient(id, p) { await wait(); need(currentUser(), 'ingredients.manage'); const s = load(); const i = s.ingredients.find((x) => x.id === Number(id)); Object.assign(i, { name: p.name ?? i.name, category: p.category ?? i.category, unit: p.unit ?? i.unit, min_stock: p.min_stock != null ? Number(p.min_stock) : i.min_stock }); save(s); return ingredientOut(i) },
-  async removeIngredient(id) { await wait(); need(currentUser(), 'ingredients.manage'); const s = load(); const i = s.ingredients.find((x) => x.id === Number(id)); if (i) i.is_active = false; save(s); return null },
-  async summary() {
-    await wait(); need(currentUser(), 'ingredients.view'); const s = load(); const act = s.ingredients.filter((i) => i.is_active); const incoming = {}
-    s.movements.filter((m) => m.type === 'penerimaan_pembelian' && sameDay(m.created_at)).forEach((m) => { const u = s.ingredients.find((i) => i.id === m.ingredient_id).unit; incoming[u] = (incoming[u] || 0) + m.quantity_change })
-    return { total_items: act.length, critical_count: act.filter((i) => ['kritis', 'habis'].includes(stockLevel(i))).length, low_count: act.filter((i) => stockLevel(i) !== 'aman').length, incoming_today: Object.entries(incoming).map(([unit, total]) => ({ unit, total })), categories: [...new Set(act.map((i) => i.category))].map((c) => ({ name: c, count: act.filter((i) => i.category === c).length })) }
-  },
-  async movements(params = {}) {
-    await wait(); need(currentUser(), 'stock.view'); const s = load()
-    return s.movements.filter((m) => (!params.type || m.type === params.type) && (!params.ingredient_id || m.ingredient_id === Number(params.ingredient_id))).sort((a, b) => b.id - a.id).slice(0, 60).map((m) => { const i = s.ingredients.find((x) => x.id === m.ingredient_id); return { id: m.id, ingredient: { id: i.id, name: i.name, unit: i.unit }, type: label(m.type, LABELS.movement), quantity_change: m.quantity_change, stock_after: m.stock_after, user: userName(s, m.user_id), reference: m.reference, note: m.note, created_at: m.created_at } })
-  },
-  async adjust({ ingredient_id, quantity_change, note }) {
-    await wait(); const u = currentUser(); need(u, 'stock.adjust'); const s = load(); const i = s.ingredients.find((x) => x.id === Number(ingredient_id)); if (!i) throw notFound('Bahan')
-    if (!note) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Catatan wajib diisi.', errors: { note: ['Catatan wajib diisi.'] } })
-    if (i.stock + Number(quantity_change) < 0) throw new ApiError({ status: 409, code: 'INSUFFICIENT_STOCK', message: 'Hasil koreksi membuat stok negatif.' })
-    i.stock += Number(quantity_change); s.seq.movement += 1; s.movements.push({ id: s.seq.movement, ingredient_id: i.id, type: 'koreksi', quantity_change: Number(quantity_change), stock_after: i.stock, user_id: u.id, reference: null, note, created_at: new Date().toISOString() }); save(s); return ingredientOut(i)
-  },
+  async ingredients() { await wait(); throw retiredOperationalFeature('inventori') },
+  async createIngredient() { await wait(); throw retiredOperationalFeature('inventori') },
+  async updateIngredient() { await wait(); throw retiredOperationalFeature('inventori') },
+  async removeIngredient() { await wait(); throw retiredOperationalFeature('inventori') },
+  async summary() { await wait(); throw retiredOperationalFeature('inventori') },
+  async movements() { await wait(); throw retiredOperationalFeature('inventori') },
+  async adjust() { await wait(); throw retiredOperationalFeature('inventori') },
 }
 
 // ---------- Pembelian ----------
-const purchaseOut = (s, p) => ({ id: p.id, purchase_number: p.purchase_number, supplier: { id: p.supplier_id, name: s.suppliers.find((x) => x.id === p.supplier_id)?.name }, status: label(p.status, LABELS.purchase), ordered_at: p.ordered_at, note: p.note, total: p.details.reduce((a, d) => a + d.qty_ordered * d.unit_price, 0), details: p.details.map((d) => { const i = s.ingredients.find((x) => x.id === d.ingredient_id); return { id: d.id, ingredient: { id: i.id, name: i.name, unit: i.unit }, qty_ordered: d.qty_ordered, qty_received: d.qty_received, qty_outstanding: d.qty_ordered - d.qty_received, unit_price: d.unit_price } }), receipts: s.receipts.filter((r) => r.purchase_id === p.id).map((r) => ({ id: r.id, receipt_number: r.receipt_number, status: label(r.status, { draft: 'Draft', dikonfirmasi: 'Dikonfirmasi' }), received_at: r.received_at, details: r.details })) })
 export const purchasingApi = {
-  async suppliers() { await wait(); need(currentUser(), 'purchases.view'); return load().suppliers.filter((x) => x.is_active) },
-  async createSupplier(p) { await wait(); need(currentUser(), 'suppliers.manage'); const s = load(); s.seq.supplier += 1; const x = { id: s.seq.supplier, name: p.name, phone: p.phone || null, address: p.address || null, is_active: true }; s.suppliers.push(x); save(s); return x },
-  async updateSupplier(id, p) { await wait(); need(currentUser(), 'suppliers.manage'); const s = load(); const x = s.suppliers.find((y) => y.id === Number(id)); Object.assign(x, p); save(s); return x },
-  async removeSupplier(id) { await wait(); need(currentUser(), 'suppliers.manage'); const s = load(); const x = s.suppliers.find((y) => y.id === Number(id)); if (x) x.is_active = false; save(s); return null },
-  async purchases() { await wait(); need(currentUser(), 'purchases.view'); const s = load(); return s.purchases.slice().reverse().map((p) => purchaseOut(s, p)) },
-  async purchase(id) { await wait(60); const s = load(); const p = s.purchases.find((x) => x.id === Number(id)); if (!p) throw notFound('Pembelian'); return purchaseOut(s, p) },
-  async createPurchase(p) {
-    await wait(); need(currentUser(), 'purchases.manage'); const s = load(); s.seq.purchase += 1; let dseq = s.purchases.reduce((a, x) => a + x.details.length, 0)
-    const rec = { id: s.seq.purchase, purchase_number: `PO-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(s.seq.purchase).padStart(3, '0')}`, supplier_id: Number(p.supplier_id), status: 'draft', ordered_at: null, note: p.note || null, details: p.details.map((d) => ({ id: ++dseq, ingredient_id: Number(d.ingredient_id), qty_ordered: Number(d.qty_ordered), qty_received: 0, unit_price: Number(d.unit_price || 0) })) }
-    s.purchases.push(rec); save(s); return purchaseOut(s, rec)
-  },
-  async updatePurchase() { throw new ApiError({ status: 501, code: 'NOT_IMPLEMENTED', message: 'Ubah draft pembelian belum tersedia di mock.' }) },
-  async placePurchase(id) { await wait(); need(currentUser(), 'purchases.manage'); const s = load(); const p = s.purchases.find((x) => x.id === Number(id)); if (p.status !== 'draft') throw new ApiError({ status: 409, code: 'INVALID_STATE_TRANSITION', message: 'Hanya draft yang bisa dipesan.' }); p.status = 'dipesan'; p.ordered_at = new Date().toISOString(); save(s); return purchaseOut(s, p) },
-  async cancelPurchase(id) { await wait(); need(currentUser(), 'purchases.manage'); const s = load(); const p = s.purchases.find((x) => x.id === Number(id)); if (s.receipts.some((r) => r.purchase_id === p.id && r.status === 'dikonfirmasi')) throw new ApiError({ status: 409, code: 'PURCHASE_NOT_EDITABLE', message: 'Sudah ada penerimaan yang dikonfirmasi.' }); p.status = 'dibatalkan'; save(s); return purchaseOut(s, p) },
-  async createReceipt(purchaseId, payload) {
-    await wait(); need(currentUser(), 'purchases.receive'); const s = load(); const p = s.purchases.find((x) => x.id === Number(purchaseId))
-    if (!['dipesan', 'diterima_sebagian'].includes(p.status)) throw new ApiError({ status: 409, code: 'PURCHASE_NOT_EDITABLE', message: 'Pembelian belum dipesan atau sudah selesai.' })
-    for (const d of payload.details) { const pd = p.details.find((x) => x.id === Number(d.purchase_detail_id)); if (Number(d.qty_received) > pd.qty_ordered - pd.qty_received) throw new ApiError({ status: 409, code: 'OVER_RECEIPT', message: 'Jumlah diterima melebihi sisa pesanan.' }) }
-    s.seq.receipt += 1; const r = { id: s.seq.receipt, receipt_number: `GR-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(s.seq.receipt).padStart(3, '0')}`, purchase_id: p.id, status: 'draft', received_at: new Date().toISOString().slice(0, 10), note: payload.note || null, details: payload.details.map((d) => ({ purchase_detail_id: Number(d.purchase_detail_id), qty_received: Number(d.qty_received) })) }
-    s.receipts.push(r); save(s); return purchaseOut(s, p)
-  },
-  async confirmReceipt(receiptId) {
-    await wait(); const u = currentUser(); need(u, 'purchases.receive'); const s = load(); const r = s.receipts.find((x) => x.id === Number(receiptId)); if (!r) throw notFound('Penerimaan')
-    if (r.status === 'dikonfirmasi') throw new ApiError({ status: 409, code: 'RECEIPT_ALREADY_CONFIRMED', message: 'Penerimaan sudah dikonfirmasi.' })
-    const p = s.purchases.find((x) => x.id === r.purchase_id)
-    for (const d of r.details) { const pd = p.details.find((x) => x.id === d.purchase_detail_id); if (d.qty_received > pd.qty_ordered - pd.qty_received) throw new ApiError({ status: 409, code: 'OVER_RECEIPT', message: 'Jumlah diterima melebihi sisa pesanan.' }) }
-    for (const d of r.details) {
-      const pd = p.details.find((x) => x.id === d.purchase_detail_id); const i = s.ingredients.find((x) => x.id === pd.ingredient_id)
-      i.stock += d.qty_received; pd.qty_received += d.qty_received; s.seq.movement += 1
-      s.movements.push({ id: s.seq.movement, ingredient_id: i.id, type: 'penerimaan_pembelian', quantity_change: d.qty_received, stock_after: i.stock, user_id: u.id, reference: `${p.purchase_number} / ${r.receipt_number}`, note: null, created_at: new Date().toISOString() })
-    }
-    r.status = 'dikonfirmasi'; p.status = p.details.every((d) => d.qty_received >= d.qty_ordered) ? 'diterima_lengkap' : 'diterima_sebagian'; save(s); return purchaseOut(s, p)
-  },
+  async suppliers() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async createSupplier() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async updateSupplier() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async removeSupplier() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async purchases() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async purchase() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async createPurchase() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async updatePurchase() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async placePurchase() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async cancelPurchase() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async createReceipt() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
+  async confirmReceipt() { await wait(); throw retiredOperationalFeature('supplier dan pembelian') },
 }
 
 // ---------- Pengguna & meja ----------
@@ -360,9 +331,11 @@ export const usersApi = {
 
 // ---------- Laporan & dashboard ----------
 const periodRange = (period = 'daily', from, to) => {
-  const end = to ? new Date(to) : new Date(); const start = from ? new Date(from) : new Date()
-  if (!from) { start.setHours(0, 0, 0, 0); if (period === 'weekly') start.setDate(start.getDate() - 6); if (period === 'monthly') start.setDate(start.getDate() - 29) }
-  end.setHours(23, 59, 59, 999); return [start, end]
+  const today = jakartaDate(new Date())
+  const daysBack = period === 'weekly' ? 6 : period === 'monthly' ? 29 : 0
+  const startDate = from || (() => { const date = new Date(`${today}T12:00:00+07:00`); date.setUTCDate(date.getUTCDate() - daysBack); return jakartaDate(date) })()
+  const endDate = to || today
+  return [new Date(`${startDate}T00:00:00+07:00`), new Date(`${endDate}T23:59:59.999+07:00`)]
 }
 function salesReport(s, params = {}) {
   const [start, end] = periodRange(params.period, params.from, params.to)
@@ -370,7 +343,7 @@ function salesReport(s, params = {}) {
   const revenue = orders.reduce((a, o) => a + o.total, 0)
   const hourly = (params.granularity || (params.period === 'daily' || !params.period ? 'hour' : 'day')) === 'hour'
   const buckets = {}
-  orders.forEach((o) => { const d = new Date(o.paid_at); const k = hourly ? String(d.getHours()).padStart(2, '0') + ':00' : d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }); buckets[k] = buckets[k] || { label: k, amount: 0, orders: 0 }; buckets[k].amount += o.total; buckets[k].orders += 1 })
+  orders.forEach((o) => { const d = new Date(o.paid_at); const k = hourly ? `${new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jakarta', hour: '2-digit', hourCycle: 'h23' }).format(d)}:00` : d.toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short' }); buckets[k] = buckets[k] || { label: k, amount: 0, orders: 0 }; buckets[k].amount += o.total; buckets[k].orders += 1 })
   const series = hourly ? Array.from({ length: 15 }, (_, i) => { const k = String(i + 8).padStart(2, '0') + ':00'; return buckets[k] || { label: k, amount: 0, orders: 0 } }) : Object.values(buckets)
   const lines = s.details.filter((d) => orders.some((o) => o.id === d.order_id))
   const byMenu = {}; const byCat = {}
@@ -378,24 +351,28 @@ function salesReport(s, params = {}) {
   const pays = s.payments.filter((p) => p.status === 'verified' && orders.some((o) => o.id === p.order_id)); const byMethod = ['qris', 'tunai'].map((m) => { const x = pays.filter((p) => p.method === m); const amount = x.reduce((a, p) => a + p.amount, 0); return { method: m, orders: x.length, amount, percent: pct(amount, revenue) } })
   const cashiers = {}; pays.forEach((p) => { const n = userName(s, p.verified_by) || '-'; cashiers[n] = cashiers[n] || { cashier: n, orders: 0, amount: 0 }; cashiers[n].orders += 1; cashiers[n].amount += p.amount })
   const done = s.tickets.filter((t) => t.ready_at && orders.some((o) => o.id === t.order_id)); const avg = done.length ? Math.round(done.reduce((a, t) => a + (new Date(t.ready_at) - new Date(s.orders.find((o) => o.id === t.order_id).ordered_at)) / 1000, 0) / done.length) : null
-  return { period: params.period || 'daily', from: start.toISOString(), to: end.toISOString(), totals: { orders: orders.length, revenue, average_order: orders.length ? Math.round(revenue / orders.length) : 0, items: lines.reduce((a, d) => a + d.qty, 0) }, by_method: byMethod, by_category: Object.values(byCat).sort((a, b) => b.amount - a.amount).map((c) => ({ ...c, percent: pct(c.amount, revenue) })), series, top_menus: Object.values(byMenu).sort((a, b) => b.qty - a.qty).slice(0, 5), cashier_recap: Object.values(cashiers), avg_service_seconds: avg }
+  const inRange = (value) => value && new Date(value) >= start && new Date(value) <= end
+  const refunds = s.refundRequests || []
+  const refundsApproved = refunds.filter((r) => ['approved', 'completed'].includes(r.status) && inRange(r.decided_at)).reduce((sum, r) => sum + Number(r.amount || 0), 0)
+  const refundsCompleted = refunds.filter((r) => r.status === 'completed' && inRange(r.completed_at)).reduce((sum, r) => sum + Number(r.amount || 0), 0)
+  return { period: params.period || 'daily', from: start.toISOString(), to: end.toISOString(), totals: { orders: orders.length, revenue, average_order: orders.length ? Math.round(revenue / orders.length) : 0, items: lines.reduce((a, d) => a + d.qty, 0), refunds_approved: refundsApproved, refunds_completed: refundsCompleted }, by_method: byMethod, by_category: Object.values(byCat).sort((a, b) => b.amount - a.amount).map((c) => ({ ...c, percent: pct(c.amount, revenue) })), series, top_menus: Object.values(byMenu).sort((a, b) => b.qty - a.qty).slice(0, 5), cashier_recap: Object.values(cashiers), avg_service_seconds: avg }
 }
 export const reportsApi = {
   async sales(params) { await wait(); need(currentUser(), 'reports.view'); return salesReport(load(), params) },
   async ownerDashboard() {
     await wait(); need(currentUser(), 'dashboard.owner'); const s = load(); const today = salesReport(s, { period: 'daily' })
-    const y = new Date(); y.setDate(y.getDate() - 1); const yest = salesReport(s, { period: 'daily', from: y.toISOString().slice(0, 10), to: y.toISOString().slice(0, 10) })
-    return { today: { revenue: today.totals.revenue, orders: today.totals.orders, average_order: today.totals.average_order, vs_yesterday_percent: yest.totals.revenue ? Math.round(((today.totals.revenue - yest.totals.revenue) / yest.totals.revenue) * 1000) / 10 : null }, series: today.series, top_menus: today.top_menus, by_method: today.by_method, low_stock: s.ingredients.filter((i) => i.is_active && stockLevel(i) !== 'aman').map(ingredientOut), critical_count: s.ingredients.filter((i) => ['kritis', 'habis'].includes(stockLevel(i))).length, pending_purchases: s.purchases.filter((p) => ['dipesan', 'diterima_sebagian'].includes(p.status)).length }
+    const y = new Date(`${jakartaDate(new Date())}T12:00:00+07:00`); y.setUTCDate(y.getUTCDate() - 1); const yesterday = jakartaDate(y); const yest = salesReport(s, { period: 'daily', from: yesterday, to: yesterday })
+    return { today: { revenue: today.totals.revenue, orders: today.totals.orders, average_order: today.totals.average_order, vs_yesterday_percent: yest.totals.revenue ? Math.round(((today.totals.revenue - yest.totals.revenue) / yest.totals.revenue) * 1000) / 10 : null }, series: today.series, top_menus: today.top_menus, by_method: today.by_method }
   },
   async managerDashboard() {
     await wait(); need(currentUser(), 'dashboard.manager'); const s = load(); const today = salesReport(s, { period: 'daily' }); const active = s.orders.filter((o) => sameDay(o.ordered_at) && ['dibayar', 'diproses'].includes(o.status))
-    return { revenue_today: today.totals.revenue, active_orders: { total: active.length, queued: s.tickets.filter((t) => t.status === 'antre').length, in_progress: s.tickets.filter((t) => t.status === 'diproses').length }, orders: s.orders.filter((o) => sameDay(o.ordered_at)).sort((a, b) => b.id - a.id).slice(0, 8).map((o) => orderOut(s, o)), low_stock: s.ingredients.filter((i) => i.is_active && stockLevel(i) !== 'aman').map(ingredientOut), unavailable_menus: s.menus.filter((m) => !menuIsOrderable(s, m).ok).map((m) => ({ id: m.id, name: m.name, reason: menuIsOrderable(s, m).reason })), pending_receipts: s.purchases.filter((p) => ['dipesan', 'diterima_sebagian'].includes(p.status)).length }
+    return { revenue_today: today.totals.revenue, active_orders: { total: active.length, queued: s.tickets.filter((t) => t.status === 'antre').length, in_progress: s.tickets.filter((t) => t.status === 'diproses').length }, orders: s.orders.filter((o) => sameDay(o.ordered_at)).sort((a, b) => b.id - a.id).slice(0, 8).map((o) => orderOut(s, o)), unavailable_menus: s.menus.filter((m) => !menuIsOrderable(s, m).ok).map((m) => ({ id: m.id, name: m.name, reason: menuIsOrderable(s, m).reason })) }
   },
-  async stockUsage() { await wait(); need(currentUser(), 'reports.view'); const s = load(); const map = {}; s.movements.filter((m) => m.type === 'pemakaian_pesanan').forEach((m) => { const i = s.ingredients.find((x) => x.id === m.ingredient_id); map[i.id] = map[i.id] || { ingredient: i.name, unit: i.unit, used: 0 }; map[i.id].used += Math.abs(m.quantity_change) }); return Object.values(map).sort((a, b) => b.used - a.used) },
+  async stockUsage() { throw retiredOperationalFeature('laporan stok') },
   async transactions(params = {}) { await wait(); need(currentUser(), 'transactions.view'); const s = load(); const q = (params.search || '').toLowerCase(); return s.payments.filter((p) => p.status === 'verified' && (!params.method || p.method === params.method)).map((p) => ({ order: orderOut(s, s.orders.find((o) => o.id === p.order_id)), payment: paymentOut(s, p) })).filter((x) => !q || x.payment.transaction_number.toLowerCase().includes(q) || x.order.items.some((i) => i.name.toLowerCase().includes(q))).sort((a, b) => new Date(b.payment.paid_at) - new Date(a.payment.paid_at)).slice(0, 25) },
   async orders(params = {}) { await wait(); need(currentUser(), 'orders.view'); const s = load(); const st = params['filter[status]']; return s.orders.filter((o) => sameDay(o.ordered_at) && (!st || o.status === st)).sort((a, b) => b.id - a.id).map((o) => orderOut(s, o)) },
   async auditLogs() { await wait(); return load().audit },
-  async alerts() { await wait(60); const s = load(); return { low_stock_count: s.ingredients.filter((i) => i.is_active && stockLevel(i) !== 'aman').length, awaiting_payment: s.payments.filter((p) => p.status === 'pending').length, new_tickets: s.tickets.filter((t) => t.status === 'antre').length } },
+  async alerts() { await wait(60); const s = load(); return { awaiting_payment: s.orders.filter((o) => o.status === 'menunggu_pembayaran').length, new_tickets: s.tickets.filter((t) => t.status === 'antre').length } },
 }
 
 const mockAttendancePayload = (payload, userId, type) => {
@@ -417,7 +394,7 @@ const mockAttendancePayload = (payload, userId, type) => {
 export const attendanceApi = {
   async todayStatus() {
     await wait(60); const u = currentUser(); const s = load()
-    const today = cafeDate()
+    const today = jakartaDate(new Date())
     const record = (s.attendances || []).find((a) => a.user_id === u.id && a.attendance_date === today)
     return {
       attendance_date: today,

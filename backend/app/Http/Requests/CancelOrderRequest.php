@@ -6,9 +6,6 @@ class CancelOrderRequest extends ApiRequest
 {
     public function rules(): array
     {
-        return [
-            'reason' => ['required', 'string', 'max:255'],
-            'restore_stock' => ['prohibited'],
-        ];
+        return ['reason' => ['required', 'string', 'max:500', 'regex:/\S/']];
     }
 }

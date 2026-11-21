@@ -26,17 +26,41 @@ class QrisPaymentProofTest extends ApiTestCase
 
     private function png(string $name = 'proof.png'): UploadedFile { return UploadedFile::fake()->image($name, 30, 30); }
 
+    public function test_customer_qris_cannot_be_verified_or_rejected_without_pending_proof_or_changed_to_cash(): void
+    {
+        [$order] = $this->qrisOrder();
+        $payment = $order->payment;
+        $this->actingAsRole(UserRole::Kasir);
+
+        $this->postJson(self::API.'/cashier/payments/'.$payment->id.'/verify')->assertUnprocessable();
+        $this->postJson(self::API.'/cashier/payments/'.$payment->id.'/verify', ['method' => 'tunai'])->assertUnprocessable();
+        $this->postJson(self::API.'/cashier/payments/'.$payment->id.'/reject', ['reason' => 'Bukti tidak tersedia'])->assertUnprocessable();
+
+        $this->assertSame('pending', $payment->fresh()->status->value);
+        $this->assertSame('qris', $payment->fresh()->method->value);
+        $this->assertSame('menunggu_pembayaran', $order->fresh()->status->value);
+        $this->assertSame(0, $order->tickets()->count());
+    }
+
     public function test_qr_self_order_proof_upload_is_private_unique_and_verification_creates_ticket_once(): void
     {
         [$order, $token] = $this->qrisOrder();
         $this->post(self::API.'/customer/orders/'.$token.'/payment-proof', ['proof' => $this->png()])->assertCreated()->assertJsonPath('data.status', 'pending')->assertJsonMissingPath('data.path');
         $proof = PaymentProof::firstOrFail();
+        $freshOrder = $order->fresh();
+        $this->assertSame('pending', $freshOrder->payment->status->value);
+        $this->assertSame('pending', $proof->status);
+        $this->assertNull($freshOrder->paid_at);
+        $this->assertSame('menunggu_pembayaran', $freshOrder->status->value);
+        $this->assertSame(0, $freshOrder->tickets()->count());
         $this->assertSame(64, strlen($proof->sha256));
         Storage::disk('local')->assertExists($proof->path);
         $this->assertSame(0, $order->tickets()->count());
 
         $this->actingAsRole(UserRole::Kasir);
         $this->getJson(self::API.'/cashier/payments/'.$order->payment->id.'/proof')->assertOk()->assertHeader('X-Content-Type-Options', 'nosniff');
+        $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify', ['method' => 'tunai'])->assertUnprocessable();
+        $this->assertSame('pending', $order->payment->fresh()->status->value);
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk()->assertJsonPath('data.status.code', 'dibayar');
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertStatus(409);
         $this->assertSame(1, $order->tickets()->count());

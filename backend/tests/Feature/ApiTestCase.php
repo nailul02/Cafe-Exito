@@ -6,9 +6,12 @@ use App\Enums\UserRole;
 use App\Models\Ingredient;
 use App\Models\Menu;
 use App\Models\MenuCategory;
+use App\Models\Order;
 use App\Models\Table;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -50,15 +53,39 @@ abstract class ApiTestCase extends TestCase
 
     protected function placeOrder(array $items, string $method = 'tunai', string $table = '1', array $headers = [])
     {
-        return $this->postJson(self::API.'/customer/orders', [
+        $response = $this->postJson(self::API.'/customer/orders', [
             'table_number' => $table, 'payment_method' => $method, 'items' => $items,
         ], $headers);
+
+        // QRIS Self-Order tests that exercise downstream payment behavior model the
+        // customer's required prior proof upload. Dedicated proof tests cover the
+        // missing-proof rejection path directly.
+        if ($method === 'qris' && $response->isSuccessful()) {
+            $token = $response->json('data.public_token');
+            $payment = Order::where('public_token', $token)->firstOrFail()->payment;
+            if (! $payment->proofs()->where('status', 'pending')->exists()) {
+                Storage::fake('local');
+                $proof = UploadedFile::fake()->image('qris-proof.png', 30, 30);
+                file_put_contents($proof->getRealPath(), $token, FILE_APPEND);
+                $this->post(self::API.'/customer/orders/'.$token.'/payment-proof', ['proof' => $proof])->assertCreated();
+            }
+        }
+
+        return $response;
     }
 
     protected function uploadPaymentProof(string $token, string $fileName = 'proof.png'): void
     {
+        $payment = Order::where('public_token', $token)->firstOrFail()->payment;
+        if ($payment->proofs()->where('status', 'pending')->exists()) {
+            return;
+        }
+
+        Storage::fake('local');
+        $proof = UploadedFile::fake()->image($fileName, 20, 20);
+        file_put_contents($proof->getRealPath(), $token, FILE_APPEND);
         $this->post(self::API."/customer/orders/$token/payment-proof", [
-            'proof' => \Illuminate\Http\UploadedFile::fake()->image($fileName, 20, 20),
+            'proof' => $proof,
         ])->assertCreated();
     }
 

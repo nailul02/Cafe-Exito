@@ -1,4 +1,4 @@
-import { get, post, getBlob } from '../http'
+import { get, post, http } from '../http'
 export const cashierApi = {
   dashboard: () => get('/cashier/dashboard'),
   orders: (params) => get('/cashier/orders', params),
@@ -6,8 +6,8 @@ export const cashierApi = {
   completeOrder: (id) => post(`/cashier/orders/${id}/complete`),
   verify: (paymentId, payload = {}) => post(`/cashier/payments/${paymentId}/verify`, payload),
   reject: (paymentId, payload = {}) => post(`/cashier/payments/${paymentId}/reject`, payload),
-  paymentProof: (paymentId) => getBlob(`/cashier/payments/${paymentId}/proof`),
   receipt: (orderId) => get(`/cashier/transactions/${orderId}/receipt`),
   createPosOrder: (payload) => post('/cashier/pos/orders', payload),
   tables: () => get('/cashier/tables'),
+  paymentProof: (paymentId) => http.get(`/cashier/payments/${paymentId}/proof`, { responseType: 'blob' }).then((r) => r.data),
 }

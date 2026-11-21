@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { cashierApi } from '../../api'
 import { useResource } from '../../hooks/useResource'
 import { useAction } from '../../hooks/useAction'
@@ -21,24 +21,15 @@ export default function CashierDashboardPage() {
   const [selectedId, setSelectedId] = useState(null)
   const [method, setMethod] = useState(null)
   const [received, setReceived] = useState('')
-  const [rejectReason, setRejectReason] = useState('')
-  const [proofUrl, setProofUrl] = useState(null)
   const [isPosOpen, setIsPosOpen] = useState(false)
   const stats = useResource(() => cashierApi.dashboard(), [], { poll: true })
   const orders = useResource(() => cashierApi.orders({ 'filter[status]': filter }), [filter], { poll: true })
   const { busy, run } = useAction()
 
   const selected = (orders.data || []).find((o) => o.id === selectedId) || null
-  const pick = (o) => { setSelectedId(o.id); setMethod(null); setReceived(''); setRejectReason('') }
+  const pick = (o) => { setSelectedId(o.id); setMethod(null); setReceived('') }
   const effectiveMethod = method || selected?.payment?.method?.code
   const after = () => { setSelectedId(null); orders.reload(); stats.refresh() }
-  useEffect(() => {
-    let active = true; let objectUrl
-    if (selected?.payment?.proof?.preview_available && selected.payment.method.code === 'qris') {
-      cashierApi.paymentProof(selected.payment.id).then((blob) => { if (active) { objectUrl = URL.createObjectURL(blob); setProofUrl(objectUrl) } }).catch(() => { if (active) setProofUrl(null) })
-    } else setProofUrl(null)
-    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
-  }, [selected?.payment?.id, selected?.payment?.proof?.preview_available])
 
   const verify = async () => {
     const payload = {}
@@ -47,7 +38,7 @@ export default function CashierDashboardPage() {
     const out = await run(() => cashierApi.verify(selected.payment.id, payload), 'Pembayaran terverifikasi')
     if (out) after()
   }
-  const reject = async () => { const out = await run(() => cashierApi.reject(selected.payment.id, { reason: rejectReason.trim() }), 'Pembayaran ditolak'); if (out) after() }
+  const reject = async () => { const out = await run(() => cashierApi.reject(selected.payment.id, {}), 'Pembayaran ditolak'); if (out) after() }
 
   const s = stats.data
   return (
@@ -90,13 +81,13 @@ export default function CashierDashboardPage() {
                       <div className="text-right">
                         <p>{rupiah(o.total)}</p>
                         <p className={cn('text-sm font-medium', o.payment?.status?.code === 'pending' ? 'text-[#f5b04c]' : 'text-white/70')}>
-                          {o.payment?.status?.label || ORDER_STATUS[o.status.code]?.label}
+                          {ORDER_STATUS[o.status.code]?.label}
                         </p>
                       </div>
                       {o.payment?.status?.code === 'pending' ? (
                         <Button variant="sand" size="sm" onClick={() => pick(o)}>Verif</Button>
                       ) : (
-                        <span className="w-14 text-xs text-white/60">{o.payment?.status?.code === 'rejected' ? 'Tunggu bukti baru' : ''}</span>
+                        <span className="w-14" />
                       )}
                     </li>
                   ))}
@@ -113,11 +104,7 @@ export default function CashierDashboardPage() {
               <p className="text-lg font-medium">
                 {selected.display_number} · {selected.table?.number ? `Meja ${selected.table.number}` : `Takeaway (${selected.customer_name || 'Pelanggan'})`}
               </p>
-              <p className="text-sm font-medium text-[#f5b04c]">Status pembayaran: {selected.payment?.status?.label || 'Tidak diketahui'}</p>
               <ul className="space-y-1.5">{selected.items.map((i) => <li key={i.id} className="flex justify-between"><span>{i.name} <span className="text-white/70">×{i.qty}</span></span><span>{rupiah(i.subtotal)}</span></li>)}</ul>
-              {selected.payment?.proof?.preview_available && <div><p className="mb-2">Bukti QRIS pelanggan · status {selected.payment.proof.status}</p>{proofUrl ? <img src={proofUrl} alt="Bukti pembayaran QRIS" className="max-h-72 max-w-full rounded-lg bg-white object-contain" /> : <p>Memuat bukti…</p>}{selected.payment.proof.reject_reason && <p className="mt-2 text-amber-200">Penolakan sebelumnya: {selected.payment.proof.reject_reason}</p>}</div>}
-              {selected.order_source === 'qr_customer' && selected.payment?.method?.code === 'qris' && selected.payment.proof?.status !== 'pending' && <p className="text-amber-200">Menunggu bukti QRIS pelanggan sebelum pembayaran dapat diverifikasi.</p>}
-              {selected.payment_history?.length > 0 && <ul aria-label="Riwayat bukti QRIS" className="space-y-1 text-sm">{selected.payment_history.map((proof, index) => <li key={`${proof.uploaded_at}-${index}`}>Bukti {index + 1}: {proof.status}{proof.reject_reason ? ` · alasan: ${proof.reject_reason}` : ''}</li>)}</ul>}
               <div className="flex justify-between border-t border-white/20 pt-3 text-lg font-medium"><span>Total</span><span>{rupiah(selected.total)}</span></div>
               <div>
                 <p className="mb-2 text-sm text-white/80">Metode Pembayaran</p>
@@ -129,10 +116,9 @@ export default function CashierDashboardPage() {
                   {received && Number(received) >= selected.total && <span className="mt-1 block">Kembalian {rupiah(Number(received) - selected.total)}</span>}
                 </label>
               )}
-              <label className="block text-sm"><span className="mb-1 block text-white/80">Alasan penolakan (wajib jika menolak)</span><textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} maxLength={255} className="w-full rounded-lg p-2 text-brand-ink" /></label>
               <div className="flex justify-end gap-3 pt-2">
-                {selected.payment?.method?.code === 'qris' && <Button variant="sand" loading={busy} disabled={!rejectReason.trim()} onClick={reject}>Tolak</Button>}
-                <Button variant="sand" loading={busy} disabled={selected.order_source === 'qr_customer' && selected.payment?.method?.code === 'qris' && selected.payment.proof?.status !== 'pending'} onClick={verify}>Verifikasi</Button>
+                <Button variant="sand" loading={busy} onClick={reject}>Tolak</Button>
+                <Button variant="sand" loading={busy} onClick={verify}>Verifikasi</Button>
               </div>
             </div>
           )}

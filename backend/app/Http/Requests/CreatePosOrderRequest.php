@@ -18,7 +18,6 @@ class CreatePosOrderRequest extends ApiRequest
             ],
             'customer_name' => ['nullable', 'string', 'max:100'],
             'payment_method' => ['required', Rule::in(['tunai', 'qris'])],
-            // Uang diterima hanya dicatat saat kasir mengonfirmasi pelunasan.
             'amount_received' => ['prohibited'],
             'items' => ['required', 'array', 'min:1', 'max:'.config('cafe.cart.max_lines', 30)],
             'items.*.menu_id' => ['required', 'integer', 'exists:menus,id'],

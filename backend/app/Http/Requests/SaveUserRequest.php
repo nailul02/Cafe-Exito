@@ -10,10 +10,16 @@ class SaveUserRequest extends ApiRequest
     protected function prepareForValidation(): void
     {
         if ($this->has('username')) {
-            $this->merge(['username' => strtolower((string) $this->input('username'))]);
+            $username = $this->input('username');
+            if (is_string($username)) {
+                $this->merge(['username' => strtolower($username)]);
+            }
         }
         if ($this->has('email')) {
-            $this->merge(['email' => strtolower(trim((string) $this->input('email')))]);
+            $email = $this->input('email');
+            if (is_string($email)) {
+                $this->merge(['email' => strtolower(trim($email))]);
+            }
         }
     }
 

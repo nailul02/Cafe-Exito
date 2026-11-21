@@ -15,7 +15,7 @@ export default function ManagementLayout() {
   const roleCode = rawRole === 'admin' ? 'manager' : rawRole
   const isOwner = roleCode === 'owner'
   const items = NAV[roleCode] || NAV[rawRole] || []
-  const onLogout = async () => { await logout(); navigate('/', { replace: true }) }
+  const onLogout = async () => { navigate('/', { replace: true }); await logout() }
 
   return (
     <div className="flex min-h-full bg-cream font-ui">

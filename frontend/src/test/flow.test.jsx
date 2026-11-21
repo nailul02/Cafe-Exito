@@ -6,6 +6,7 @@ import App from '../App'
 import { AuthProvider } from '../context/AuthContext'
 import { CartProvider } from '../context/CartContext'
 import { ToastProvider } from '../context/ToastContext'
+import { buildSeed, createOrderIn, menuIsOrderable, verifyIn } from '../mocks/db'
 
 const Pathname = () => <output data-testid="pathname">{useLocation().pathname}</output>
 const mount = (path) => render(
@@ -37,6 +38,50 @@ afterEach(() => {
 })
 
 describe('alur lengkap dengan data mock', () => {
+  it('deep link staf tanpa sesi diarahkan ke login dan tujuan asal dipertahankan', async () => {
+    const user = userEvent.setup()
+    mount('/manager/reports')
+    expect(await screen.findByRole('heading', { name: 'Login' })).toBeInTheDocument()
+    await login(user, 'manager')
+    expect(await screen.findByText('Kelola Laporan & Analitik')).toBeInTheDocument()
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/manager/reports')
+  })
+
+  it('navigasi Manager Meja & QR membuka pengelolaan meja, bukan akun pengguna', async () => {
+    const user = userEvent.setup()
+    mount('/')
+    await login(user, 'manager')
+    await screen.findByText('Manager Dashboard')
+    await user.click(screen.getByRole('link', { name: 'Meja & QR' }))
+    expect(await screen.findByRole('heading', { name: 'Meja & QR' })).toBeInTheDocument()
+    expect(await screen.findByText('Tautan QR')).toBeInTheDocument()
+  })
+
+  it('QRIS Self-Order wajib memiliki bukti dan tidak bisa diubah menjadi tunai', () => {
+    const state = buildSeed()
+    const { order, payment } = createOrderIn(state, { table: 1, items: [[1, 1]], method: 'qris' })
+
+    expect(() => verifyIn(state, payment.id, 3)).toThrow(/Bukti QRIS pelanggan/)
+    expect(() => verifyIn(state, payment.id, 3, { method: 'tunai' })).toThrow(/metode pembayaran Self-Order tidak dapat diubah/i)
+    expect(payment.status).toBe('pending')
+    expect(order.status).toBe('menunggu_pembayaran')
+    expect(state.tickets.filter((ticket) => ticket.order_id === order.id)).toHaveLength(0)
+  })
+
+  it('QRIS POS menunggu verifikasi manual dan menu tidak bergantung pada stok', () => {
+    const state = buildSeed()
+    expect(state.ingredients).toEqual([])
+    expect(menuIsOrderable(state, state.menus[0]).ok).toBe(true)
+
+    const { order, payment } = createOrderIn(state, { table: 1, items: [[1, 1]], method: 'qris', order_source: 'pos_cashier' })
+    expect(payment.status).toBe('pending')
+    expect(state.tickets.filter((ticket) => ticket.order_id === order.id)).toHaveLength(0)
+    verifyIn(state, payment.id, 3)
+    expect(payment.status).toBe('verified')
+    expect(state.tickets.filter((ticket) => ticket.order_id === order.id)).toHaveLength(1)
+    expect(state.movements).toEqual([])
+  })
+
   it('pelanggan memesan → status menunggu pembayaran', async () => {
     const user = userEvent.setup()
     mount('/order/table')
@@ -52,6 +97,29 @@ describe('alur lengkap dengan data mock', () => {
     expect(await screen.findByText(/Pesanan\s*Diterima/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Lihat Status Pesanan' }))
     expect(await screen.findByText(/Menunggu pembayaran/)).toBeInTheDocument()
+  })
+
+  it('pelanggan membatalkan sebagian kuantitas dengan alasan wajib', async () => {
+    const user = userEvent.setup()
+    mount('/order/table')
+    await user.type(await screen.findByLabelText('Nomor meja'), '6')
+    await user.click(screen.getByRole('button', { name: 'Mulai memesan' }))
+    await screen.findByText('Es Kopi Susu')
+    const add = screen.getAllByRole('button', { name: 'Tambah' })[0]
+    await user.click(add); await user.click(add)
+    await user.click(await screen.findByRole('button', { name: /Lihat Keranjang/ }))
+    await user.click(screen.getByRole('button', { name: 'Pilih Metode Pembayaran' }))
+    await user.click(await screen.findByRole('button', { name: 'Tunai' }))
+    await user.click(screen.getByRole('button', { name: /Pesan Sekarang/ }))
+    await screen.findByText(/Pesanan\s*Diterima/)
+    await user.click(screen.getByRole('button', { name: 'Lihat Status Pesanan' }))
+    const cancel = await screen.findByRole('button', { name: 'Batalkan' })
+    expect(cancel).toBeDisabled()
+    await user.type(screen.getByLabelText('Alasan pembatalan wajib'), 'Salah pesan')
+    await user.selectOptions(screen.getByLabelText(/Jumlah pembatalan Es Kopi Susu/), '1')
+    await user.click(cancel)
+    expect(await screen.findByText(/1 dibatalkan · Salah pesan/)).toBeInTheDocument()
+    expect(await screen.findByText(/1 item/)).toBeInTheDocument()
   })
 
   it('beranda menampilkan menu pelanggan dan login karyawan melalui modal', async () => {
@@ -244,9 +312,27 @@ describe('alur lengkap dengan data mock', () => {
     expect(screen.getByRole('button', { name: 'Login Karyawan' })).toBeInTheDocument()
   })
 
-  it('URL internal tanpa autentikasi kembali ke menu publik', async () => {
+  it('URL internal tanpa autentikasi diarahkan ke login staf', async () => {
     mount('/manager')
-    expect(await screen.findByText('Es Kopi Susu')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Login' })).toBeInTheDocument()
     expect(screen.queryByText('Manager Dashboard')).not.toBeInTheDocument()
+  })
+
+  it('pelanggan mengunggah bukti QRIS tanpa melunasi payment otomatis', async () => {
+    const user = userEvent.setup()
+    mount('/order/table')
+    await user.type(await screen.findByLabelText('Nomor meja'), '6')
+    await user.click(screen.getByRole('button', { name: 'Mulai memesan' }))
+    await screen.findByText('Es Kopi Susu')
+    await user.click(screen.getAllByRole('button', { name: 'Tambah' })[0])
+    await user.click(await screen.findByRole('button', { name: /Lihat Keranjang/ }))
+    await user.click(screen.getByRole('button', { name: 'Pilih Metode Pembayaran' }))
+    await user.click(await screen.findByRole('button', { name: 'QRIS' }))
+    await user.click(screen.getByRole('button', { name: /Pesan Sekarang/ }))
+    await user.click(await screen.findByRole('button', { name: 'Lihat Status Pesanan' }))
+    const file = new File(['bukti demo'], 'bukti.jpg', { type: 'image/jpeg' })
+    await user.upload(await screen.findByLabelText('Pilih bukti pembayaran QRIS'), file)
+    await user.click(screen.getByRole('button', { name: 'Kirim bukti' }))
+    expect(await screen.findByText(/Bukti sudah diunggah dan sedang menunggu verifikasi Kasir/)).toBeInTheDocument()
   })
 })

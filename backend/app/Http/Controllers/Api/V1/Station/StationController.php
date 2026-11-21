@@ -34,7 +34,8 @@ class StationController extends Controller
         /** @var Station $station */
         $station = $request->attributes->get('station');
         $status = data_get($request->query(), 'filter.status');
-        $since = $request->query('updated_since') ? Carbon::parse($request->query('updated_since')) : null;
+        $filters = $request->validate(['updated_since' => ['nullable', 'date']]);
+        $since = filled($filters['updated_since'] ?? null) ? Carbon::parse($filters['updated_since']) : null;
 
         return ApiResponse::success(TicketResource::collection($this->tickets->queue($station, $status, $since)->get()));
     }
@@ -51,11 +52,12 @@ class StationController extends Controller
         return ApiResponse::success(TicketResource::make($this->find($request, $ticket)), 'Pesanan mulai diproses');
     }
 
-    public function startItem(Request $request, string $station, int $ticket, int $detail, TicketService $service)
+    public function startItem(Request $request,string $station,int $ticket,int $detail,TicketService $service)
     {
-        $service->startItem($this->find($request, $ticket), $detail, $request->user());
-        return ApiResponse::success(TicketResource::make($this->find($request, $ticket)), 'Item mulai diproses');
+        $service->startItem($this->find($request,$ticket),$detail,$request->user());
+        return ApiResponse::success(TicketResource::make($this->find($request,$ticket)),'Item mulai diproses');
     }
+
     public function complete(Request $request, string $station, int $ticket)
     {
         $this->tickets->complete($this->find($request, $ticket), $request->user());

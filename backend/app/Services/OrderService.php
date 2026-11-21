@@ -8,7 +8,6 @@ use App\Enums\TicketStatus;
 use App\Exceptions\DomainError;
 use App\Models\Menu;
 use App\Models\Order;
-use App\Models\Payment;
 use App\Models\OrderDetail;
 use App\Models\OrderItemCancellation;
 use App\Models\Table;
@@ -145,47 +144,63 @@ class OrderService
     {
         return DB::transaction(function () use ($order, $detailId, $qty, $reason, $source, $actor, $key) {
             $order = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
-            if ($key && $existing=OrderItemCancellation::query()->where('order_id',$order->id)->where('idempotency_key',$key)->first()) {
+            if ($key && $existing = OrderItemCancellation::query()->where('order_id', $order->id)->where('idempotency_key', $key)->first()) {
                 $samePayload = (int) $existing->order_detail_id === $detailId
                     && (int) $existing->qty === $qty
                     && trim($existing->reason) === trim($reason)
                     && $existing->source === $source
                     && (int) ($existing->actor_id ?? 0) === (int) ($actor?->id ?? 0);
                 if (! $samePayload) {
-                    throw new DomainError('IDEMPOTENCY_KEY_REUSED','Idempotency-Key ini sudah digunakan untuk pembatalan dengan payload berbeda.',409);
+                    throw new DomainError('IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key ini sudah digunakan untuk pembatalan dengan payload berbeda.', 409);
                 }
 
                 return $order->fresh();
             }
-            if ($order->status === OrderStatus::Dibatalkan || $order->status === OrderStatus::Selesai) throw DomainError::orderNotCancellable();
-            $detail=OrderDetail::query()->where('order_id',$order->id)->whereKey($detailId)->lockForUpdate()->firstOrFail();
-            if ($detail->started_at) throw new DomainError('ORDER_NOT_CANCELLABLE','Item sudah mulai diproses.',409);
-            $remaining=$detail->qty-(int)$detail->cancellations()->sum('qty');
-            if($qty<1||$qty>$remaining)throw new DomainError('INVALID_CANCELLATION_QUANTITY','Kuantitas melebihi jumlah yang belum dibatalkan.',422,['remaining'=>$remaining]);
-            $qtyStart=(int)$detail->cancellations()->max('qty_end')+1;
-            $cancellation=OrderItemCancellation::create(['order_id'=>$order->id,'order_detail_id'=>$detail->id,'qty'=>$qty,'qty_start'=>$qtyStart,'qty_end'=>$qtyStart+$qty-1,'unit_price'=>$detail->unit_price,'source'=>$source,'actor_type'=>$actor?'owner':'customer','actor_id'=>$actor?->id,'reason'=>trim($reason),'idempotency_key'=>$key]);
-            $payment=$order->payments()->lockForUpdate()->latest('id')->first();
-            if($payment?->status===PaymentStatus::Pending){
-                $payment->update(['amount'=>max(0,$payment->amount-$detail->unit_price*$qty)]);
-                $order->update(['total'=>max(0,$order->total-$detail->unit_price*$qty)]);
-            } elseif($payment?->status===PaymentStatus::Verified) {
-                $this->refunds->requestForCancellation($cancellation,$payment);
+            if ($order->status === OrderStatus::Dibatalkan || $order->status === OrderStatus::Selesai) {
+                throw DomainError::orderNotCancellable();
             }
-            $allCancelled=$order->details()->get()->every(fn($d)=>$d->qty <= (int)$d->cancellations()->sum('qty'));
-            if($allCancelled){
-                $from=$order->status->value;
-                $order->update(['status'=>OrderStatus::Dibatalkan->value,'cancelled_at'=>now(),'cancel_reason'=>trim($reason),'cancelled_by'=>$actor?->id]);
-                $this->log->order($order,$from,OrderStatus::Dibatalkan->value,$actor,trim($reason));
-                if($payment?->status===PaymentStatus::Pending)$payment->update(['status'=>PaymentStatus::Cancelled->value]);
-                foreach($order->tickets()->whereNull('started_at')->get() as $ticket){$ticket->update(['status'=>TicketStatus::Dibatalkan->value,'cancelled_at'=>now()]);}
+            $detail = OrderDetail::query()->where('order_id', $order->id)->whereKey($detailId)->lockForUpdate()->firstOrFail();
+            if ($detail->started_at) {
+                throw new DomainError('ORDER_NOT_CANCELLABLE', 'Item sudah mulai diproses.', 409);
             }
-            $this->audit->record($actor,'order.item_cancelled','order_detail',$detail->id,['order_id'=>$order->id,'qty'=>$qty,'reason'=>trim($reason),'source'=>$source,'cancellation_id'=>$cancellation->id]);
-            $notice=['order_id'=>$order->id,'order_number'=>$order->order_number,'detail_id'=>$detail->id,'qty'=>$qty,'reason'=>trim($reason),'source'=>$source];
-            $this->notifications->sendRole('kasir','order.item_cancelled',$notice);
-            $this->notifications->sendStation($detail->station->value,'order.item_cancelled',$notice);
-            $stationItems=$order->details()->where('station',$detail->station->value)->with('cancellations')->get();
-            if($stationItems->every(fn($d)=>$d->qty<=(int)$d->cancellations->sum('qty'))){
-                foreach($order->tickets()->where('station',$detail->station->value)->lockForUpdate()->get() as $ticket){if($ticket->status->isOpen()){$before=$ticket->status->value;$ticket->update(['status'=>TicketStatus::Dibatalkan->value,'cancelled_at'=>now()]);$this->log->ticket($order,$ticket,$before,TicketStatus::Dibatalkan->value,$actor,'Seluruh item stasiun dibatalkan');}}
+            $remaining = $detail->qty - (int) $detail->cancellations()->sum('qty');
+            if ($qty < 1 || $qty > $remaining) {
+                throw new DomainError('INVALID_CANCELLATION_QUANTITY', 'Kuantitas melebihi jumlah yang belum dibatalkan.', 422, ['remaining' => $remaining]);
+            }
+            $qtyStart = (int) $detail->cancellations()->max('qty_end') + 1;
+            $cancellation = OrderItemCancellation::create(['order_id' => $order->id, 'order_detail_id' => $detail->id, 'qty' => $qty, 'qty_start' => $qtyStart, 'qty_end' => $qtyStart + $qty - 1, 'unit_price' => $detail->unit_price, 'source' => $source, 'actor_type' => $actor ? 'owner' : 'customer', 'actor_id' => $actor?->id, 'reason' => trim($reason), 'idempotency_key' => $key]);
+            $payment = $order->payments()->lockForUpdate()->latest('id')->first();
+            if ($payment?->status === PaymentStatus::Pending) {
+                $payment->update(['amount' => max(0, $payment->amount - $detail->unit_price * $qty)]);
+                $order->update(['total' => max(0, $order->total - $detail->unit_price * $qty)]);
+            } elseif ($payment?->status === PaymentStatus::Verified) {
+                $this->refunds->requestForCancellation($cancellation, $payment);
+            }
+            $allCancelled = $order->details()->get()->every(fn ($d) => $d->qty <= (int) $d->cancellations()->sum('qty'));
+            if ($allCancelled) {
+                $from = $order->status->value;
+                $order->update(['status' => OrderStatus::Dibatalkan->value, 'cancelled_at' => now(), 'cancel_reason' => trim($reason), 'cancelled_by' => $actor?->id]);
+                $this->log->order($order, $from, OrderStatus::Dibatalkan->value, $actor, trim($reason));
+                if ($payment?->status === PaymentStatus::Pending) {
+                    $payment->update(['status' => PaymentStatus::Cancelled->value]);
+                }
+                foreach ($order->tickets()->whereNull('started_at')->get() as $ticket) {
+                    $ticket->update(['status' => TicketStatus::Dibatalkan->value, 'cancelled_at' => now()]);
+                }
+            }
+            $this->audit->record($actor, 'order.item_cancelled', 'order_detail', $detail->id, ['order_id' => $order->id, 'qty' => $qty, 'reason' => trim($reason), 'source' => $source, 'cancellation_id' => $cancellation->id]);
+            $notice = ['order_id' => $order->id, 'order_number' => $order->order_number, 'detail_id' => $detail->id, 'qty' => $qty, 'reason' => trim($reason), 'source' => $source];
+            $this->notifications->sendRole('kasir', 'order.item_cancelled', $notice);
+            $this->notifications->sendStation($detail->station->value, 'order.item_cancelled', $notice);
+            $stationItems = $order->details()->where('station', $detail->station->value)->with('cancellations')->get();
+            if ($stationItems->every(fn ($d) => $d->qty <= (int) $d->cancellations->sum('qty'))) {
+                foreach ($order->tickets()->where('station', $detail->station->value)->lockForUpdate()->get() as $ticket) {
+                    if ($ticket->status->isOpen()) {
+                        $before = $ticket->status->value;
+                        $ticket->update(['status' => TicketStatus::Dibatalkan->value, 'cancelled_at' => now()]);
+                        $this->log->ticket($order, $ticket, $before, TicketStatus::Dibatalkan->value, $actor, 'Seluruh item stasiun dibatalkan');
+                    }
+                }
             }
 
             return $order->fresh();

@@ -15,7 +15,7 @@ use Illuminate\Http\Request;
 
 class CashierController extends Controller
 {
-    private const WITH = ['table', 'details', 'payment.verifier', 'payment.latestProof', 'payments.proofs', 'tickets'];
+    private const WITH = ['table', 'details.cancellations.refundItem.refundRequest', 'payment.verifier', 'payment.latestProof', 'payments.proofs', 'tickets'];
 
     public function dashboard(DashboardService $dashboard)
     {
@@ -39,10 +39,7 @@ class CashierController extends Controller
         $search = trim((string) $request->query('search', ''));
         $orders = Order::query()->with(self::WITH)
             ->where('ordered_at', '>=', now()->startOfDay())
-            ->when($status === 'menunggu_pembayaran', fn ($q) => $q->where(function ($pending) {
-                $pending->where('status', 'menunggu_pembayaran')
-                    ->orWhereHas('payments', fn ($payment) => $payment->where('status', 'pending'));
-            }))
+            ->when($status === 'menunggu_pembayaran', fn ($q) => $q->whereHas('payment', fn ($payment) => $payment->where('status', 'pending')))
             ->when($status && ! in_array($status, ['semua', 'menunggu_pembayaran'], true), fn ($q) => $q->where('status', $status))
             ->when($search !== '', fn ($q) => $q->where('order_number', 'ilike', '%'.addcslashes($search, '%_\\').'%'))
             ->orderByDesc('id')->limit(200)->get();

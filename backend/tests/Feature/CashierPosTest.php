@@ -3,9 +3,10 @@
 namespace Tests\Feature;
 
 use App\Enums\UserRole;
+use App\Models\AuditLog;
 use App\Models\Order;
-use Illuminate\Support\Str;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Str;
 
 /**
  * POS Kasir: pesanan dibuat dengan status menunggu_pembayaran.
@@ -52,9 +53,11 @@ class CashierPosTest extends ApiTestCase
             ->assertJsonPath('data.status.code', 'menunggu_pembayaran')
             ->assertJsonPath('data.total', 40000)
             ->assertJsonPath('data.payment.status.code', 'pending')
+            ->assertJsonPath('data.payment.amount_received', null)
             ->assertJsonPath('data.table.id', $table->id);
 
         $orderId = $response->json('data.id');
+        $this->assertSame(1, Order::findOrFail($orderId)->tickets()->count());
         $this->assertSame(1, Order::query()->where('order_source', 'pos_cashier')->count());
 
         // Retry dengan client_request_id yang sama tidak menggandakan pesanan
@@ -133,7 +136,7 @@ class CashierPosTest extends ApiTestCase
             ->assertJsonPath('data.service_type', 'takeaway')
             ->assertJsonPath('data.table', null)
             ->assertJsonPath('data.payment.method.code', 'qris')
-            // QRIS menunggu verifikasi manual; upload bukti belum tersedia dan dicatat sebagai gap UAT.
+            // QRIS POS menunggu pemeriksaan dan konfirmasi manual Kasir tanpa upload bukti Self-Order.
             ->assertJsonPath('data.payment.status.code', 'pending');
 
         // Verifikasi QRIS oleh kasir
@@ -141,7 +144,34 @@ class CashierPosTest extends ApiTestCase
         $order = Order::findOrFail($orderId);
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')
             ->assertOk()
-            ->assertJsonPath('data.payment.status.code', 'verified');
+            ->assertJsonPath('data.payment.status.code', 'verified')
+            ->assertJsonPath('data.status.code', 'dibayar');
+    }
+
+    public function test_kasir_tidak_dapat_mengubah_qris_pos_menjadi_tunai_saat_verifikasi(): void
+    {
+        $menu = $this->menuWithRecipe('Teh POS QRIS tidak dapat diganti', ['Teh POS QRIS' => [20, 2]], false, 12000);
+        $this->actingAsRole(UserRole::Kasir);
+
+        $response = $this->postJson(self::API.'/cashier/pos/orders', [
+            'client_request_id' => (string) Str::uuid(),
+            'service_type' => 'takeaway',
+            'payment_method' => 'qris',
+            'items' => [['menu_id' => $menu->id, 'qty' => 1]],
+        ])->assertCreated();
+
+        $order = Order::findOrFail($response->json('data.id'));
+        $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify', ['method' => 'tunai'])
+            ->assertUnprocessable();
+
+        $this->assertSame('pending', $order->payment->fresh()->status->value);
+        $this->assertSame('qris', $order->payment->fresh()->method->value);
+        $this->assertSame('menunggu_pembayaran', $order->fresh()->status->value);
+        $this->assertSame(0, AuditLog::query()
+            ->where('action', 'payment.verified')
+            ->where('subject_type', 'payment')
+            ->where('subject_id', $order->payment->id)
+            ->count());
     }
 
     public function test_kasir_dapat_membuat_dine_in_tanpa_meja_di_pos(): void

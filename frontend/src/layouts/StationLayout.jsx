@@ -13,7 +13,7 @@ export default function StationLayout() {
   const navigate = useNavigate()
   const roleCode = user?.role?.code || user?.role || ''
   const items = NAV[roleCode] || (roleCode === 'admin' ? NAV.manager : [])
-  const onLogout = async () => { await logout(); navigate('/', { replace: true }) }
+  const onLogout = async () => { navigate('/', { replace: true }); await logout() }
 
   return (
     <div className="flex min-h-full bg-white">

@@ -34,17 +34,22 @@ class CustomerOrderController extends Controller
 
     public function cancel(CancelOrderItemRequest $request, string $publicToken)
     {
-        $data = $request->validated();
-        $order = $this->orders->cancelItemByCustomer($this->find($publicToken), $data['detail_id'], $data['qty'], $data['reason'], $request->header('Idempotency-Key'));
-        return ApiResponse::success(CustomerOrderResource::make($order->load(self::WITH)), 'Item pesanan dibatalkan');
+        $data=$request->validated();
+        $order = $this->orders->cancelItemByCustomer($this->find($publicToken),$data['detail_id'],$data['qty'],$data['reason'],$request->header('Idempotency-Key'));
+
+        return ApiResponse::success(CustomerOrderResource::make($order->load(self::WITH)), 'Pesanan dibatalkan');
     }
+
     public function uploadProof(UploadPaymentProofRequest $request, string $publicToken, PaymentProofService $proofs)
     {
         $proof = $proofs->upload($this->find($publicToken), $request->file('proof'));
-        return ApiResponse::created(['status' => $proof->status, 'uploaded_at' => $proof->uploaded_at->toIso8601String(), 'mime_type' => $proof->mime_type, 'size_bytes' => $proof->size_bytes], 'Bukti pembayaran diterima dan menunggu verifikasi');
+        return ApiResponse::created([
+            'status' => $proof->status,
+            'uploaded_at' => $proof->uploaded_at->toIso8601String(),
+            'mime_type' => $proof->mime_type,
+            'size_bytes' => $proof->size_bytes,
+        ], 'Bukti pembayaran diterima dan menunggu verifikasi');
     }
-
-
 
     private function find(string $publicToken): Order
     {

@@ -20,7 +20,7 @@ export default function LoginPage() {
   const roleCode = user?.role?.code || user?.role
   const homeDest = getHomeByRole(roleCode, user?.station)
 
-  if (user) return <Navigate to={homeDest || '/order'} replace />
+  if (user) return <Navigate to={location.state?.from || homeDest || '/order'} replace />
 
   const submit = async (e) => {
     e.preventDefault(); setBusy(true); setError(null)

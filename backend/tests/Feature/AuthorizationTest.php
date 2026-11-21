@@ -61,6 +61,7 @@ class AuthorizationTest extends ApiTestCase
         $this->actingAsRole(UserRole::Owner);
         $this->getJson(self::API.'/dashboard/owner')->assertOk();
         $this->getJson(self::API.'/reports/sales?period=weekly')->assertOk();
+        // Purchasing and inventory routes are retired, so these must remain absent (404).
         $this->postJson(self::API.'/purchasing/purchases', [])->assertNotFound();
         $this->postJson(self::API.'/inventory/stock-adjustments', [])->assertNotFound();
         $this->postJson(self::API.'/station/barista/tickets/1/start')->assertStatus(403);

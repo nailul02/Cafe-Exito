@@ -44,6 +44,7 @@ class TicketService
 
             $ticket->update(['status' => TicketStatus::Diproses->value, 'started_at' => now(), 'handled_by' => $user->id]);
             $order->details()->where('station',$ticket->station->value)->whereNull('started_at')->update(['started_at'=>now()]);
+            if($order->status===OrderStatus::Dibayar){$order->update(['status'=>OrderStatus::Diproses->value]);$this->log->order($order,OrderStatus::Dibayar->value,OrderStatus::Diproses->value,$user,'Produksi dimulai');}
             $this->log->ticket($order, $ticket, TicketStatus::Antre->value, TicketStatus::Diproses->value, $user);
             return $ticket;
         });
@@ -59,6 +60,7 @@ class TicketService
             if($detail->station->value!==$ticket->station->value||$detail->started_at||$detail->qty<=(int)$detail->cancellations->sum('qty'))throw DomainError::invalidTransition('Item','belum dapat diproses','diproses');
             $detail->update(['started_at'=>now()]);
             if($ticket->status===TicketStatus::Antre){$from=$ticket->status->value;$ticket->update(['status'=>TicketStatus::Diproses->value,'started_at'=>now(),'handled_by'=>$user->id]);$this->log->ticket($order,$ticket,$from,TicketStatus::Diproses->value,$user);}
+            if($order->status===OrderStatus::Dibayar){$order->update(['status'=>OrderStatus::Diproses->value]);$this->log->order($order,OrderStatus::Dibayar->value,OrderStatus::Diproses->value,$user,'Produksi item dimulai');}
             return $ticket->fresh();
         });
     }
