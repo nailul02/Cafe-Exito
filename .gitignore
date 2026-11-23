@@ -80,3 +80,6 @@ Thumbs.db
 
 # Local npm configuration artifact; may contain registry credentials
 /ntent .npmrc
+
+# Keep documentation local only
+/docs/
