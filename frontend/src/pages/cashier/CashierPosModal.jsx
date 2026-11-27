@@ -17,16 +17,17 @@ function newRequestId() {
 
 export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
   const [serviceType, setServiceType] = useState('dine_in') // 'dine_in' | 'takeaway'
-  const [tableNumber, setTableNumber] = useState('')
+  const [tableId, setTableId] = useState('')
   const [customerName, setCustomerName] = useState('')
   const [cart, setCart] = useState({}) // { [menuId]: qty }
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('all')
   const [paymentMethod, setPaymentMethod] = useState('tunai') // 'tunai' | 'qris'
+  const [availabilityIssue, setAvailabilityIssue] = useState('')
   const requestId = useRef(null)
 
-  const menusRes = useResource(() => customerApi.menus(), [isOpen], { initial: [] })
-  const tablesRes = useResource(() => cashierApi.tables(), [isOpen], { initial: [] })
+  const menusRes = useResource(() => customerApi.menus(), [isOpen], { initial: [], enabled: isOpen, poll: true, interval: 10000 })
+  const tablesRes = useResource(() => cashierApi.tables(), [isOpen], { initial: [], enabled: isOpen })
   const { busy, run } = useAction()
 
   const menus = menusRes.data || []
@@ -79,13 +80,14 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
     return Object.entries(cart)
       .map(([menuId, qty]) => {
         const menu = menus.find((m) => String(m.id) === String(menuId))
-        if (!menu) return null
+        if (!menu) return { menu_id: Number(menuId), name: 'Menu tidak ditemukan', price: 0, qty, subtotal: 0, is_orderable: false }
         return {
           menu_id: menu.id,
           name: menu.name,
           price: menu.price,
           qty,
           subtotal: menu.price * qty,
+          is_orderable: menu.is_orderable,
         }
       })
       .filter(Boolean)
@@ -101,11 +103,20 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
       return
     }
 
+    setAvailabilityIssue('')
+    const validation = await run(() => customerApi.validateCart(cartItems.map((item) => ({ menu_id: item.menu_id, qty: item.qty }))))
+    if (!validation) return
+    if (validation.issues?.length) {
+      setAvailabilityIssue(`${validation.issues.map((issue) => issue.message).join(' ')} Hapus item yang habis atau pilih menu lain.`)
+      menusRes.refresh()
+      return
+    }
+
     const payload = {
       client_request_id: requestId.current || (requestId.current = newRequestId()),
       service_type: serviceType,
-      table_number: serviceType === 'dine_in' && tableNumber ? tableNumber : null,
-      customer_name: customerName.trim() || (serviceType === 'takeaway' ? 'Pelanggan Takeaway' : (tableNumber ? `Meja ${tableNumber}` : 'Dine In (Bar)')),
+      table_id: serviceType === 'dine_in' && tableId ? Number(tableId) : null,
+      customer_name: customerName.trim() || (serviceType === 'takeaway' ? 'Pelanggan Takeaway' : `Meja ${tables.find((table) => String(table.id) === String(tableId))?.table_number || ''}`),
       payment_method: paymentMethod,
       items: cartItems.map((item) => ({
         menu_id: item.menu_id,
@@ -117,7 +128,7 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
     if (res) {
       // Reset form
       setCart({})
-      setTableNumber('')
+      setTableId('')
       setCustomerName('')
       requestId.current = null
       onSuccess?.(res)
@@ -255,7 +266,7 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                     type="button"
                     onClick={() => {
                       setServiceType('takeaway')
-                      setTableNumber('')
+                      setTableId('')
                     }}
                     className={cn(
                       'py-2 px-3 rounded-lg text-sm font-medium border transition',
@@ -275,13 +286,13 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                   <div>
                     <label className="text-xs text-white/80 block mb-1">Nomor Meja *</label>
                     <select
-                      value={tableNumber}
-                      onChange={(e) => setTableNumber(e.target.value)}
+                      value={tableId}
+                      onChange={(e) => setTableId(e.target.value)}
                       className="w-full rounded-lg bg-white px-3 py-2 text-sm text-brand-ink font-medium border border-gray-300 focus:outline-none focus:ring-2 focus:ring-brand-sand"
                     >
                       <option value="">Pilih Meja...</option>
                       {tables.map((t) => (
-                        <option key={t.id} value={t.table_number}>
+                        <option key={t.id} value={t.id}>
                           Meja {t.table_number}
                         </option>
                       ))}
@@ -299,8 +310,9 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                   </div>
                 )}
                 <div>
-                  <label className="text-xs text-white/80 block mb-1">Nama Pelanggan</label>
+                  <label htmlFor="pos-customer-name" className="text-xs text-white/80 block mb-1">Nama Pelanggan</label>
                   <Input
+                    id="pos-customer-name"
                     type="text"
                     placeholder={serviceType === 'takeaway' ? 'Cth: Budi' : 'Opsional'}
                     value={customerName}
@@ -332,6 +344,7 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                 </div>
               ) : (
                 <div className="space-y-2">
+                  {availabilityIssue && <p role="alert" className="rounded-lg bg-red-900/40 p-3 text-xs text-red-200">{availabilityIssue}</p>}
                   {cartItems.map((item) => (
                     <div
                       key={item.menu_id}
@@ -340,6 +353,7 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                       <div className="min-w-0 flex-1 pr-2">
                         <p className="text-sm font-medium text-white truncate">{item.name}</p>
                         <p className="text-xs text-white/60">{rupiah(item.price)}</p>
+                        {!item.is_orderable && <p className="text-xs font-semibold text-red-300">HABIS — hapus atau pilih menu lain</p>}
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -354,6 +368,7 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                           <span className="w-7 text-center text-xs font-bold text-white">{item.qty}</span>
                           <button
                             type="button"
+                            disabled={!item.is_orderable}
                             onClick={() => updateQty(item.menu_id, 1)}
                             className="flex h-6 w-6 items-center justify-center rounded text-white/80 hover:bg-white/20"
                           >
@@ -440,7 +455,8 @@ export default function CashierPosModal({ isOpen, onClose, onSuccess }) {
                   loading={busy}
                   disabled={
                     cartItems.length === 0 ||
-                    (serviceType === 'dine_in' && !tableNumber)
+                    cartItems.some((item) => !item.is_orderable) ||
+                    (serviceType === 'dine_in' && !tableId)
                   }
                   onClick={handleSubmit}
                 >

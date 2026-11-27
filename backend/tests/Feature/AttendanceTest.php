@@ -75,17 +75,19 @@ class AttendanceTest extends ApiTestCase
 
     public function test_geofence_menolak_lokasi_di_luar_radius(): void
     {
+        $attendanceCount = Attendance::count();
         $this->actingAsRole(UserRole::Kasir);
         config(['attendance.geofence.latitude' => 0.0, 'attendance.geofence.longitude' => 0.0]);
         $outsideLatitude = rad2deg(30.01 / 6371008.8);
 
         $this->post(self::API.'/attendance/check-in', $this->attendancePayload($outsideLatitude, 0.0))
             ->assertUnprocessable()->assertJsonValidationErrors('latitude');
-        $this->assertSame(0, Attendance::count());
+        $this->assertSame($attendanceCount, Attendance::count());
     }
 
     public function test_geofence_gagal_tertutup_jika_lokasi_backend_belum_dikonfigurasi(): void
     {
+        $attendanceCount = Attendance::count();
         $this->actingAsRole(UserRole::Kasir);
         config(['attendance.geofence.latitude' => null, 'attendance.geofence.longitude' => null]);
 
@@ -94,7 +96,7 @@ class AttendanceTest extends ApiTestCase
         config(['attendance.geofence.latitude' => 91.0, 'attendance.geofence.longitude' => 0.0]);
         $this->post(self::API.'/attendance/check-in', $this->attendancePayload())
             ->assertStatus(503)->assertJsonPath('error.code', 'ATTENDANCE_GEOFENCE_UNAVAILABLE');
-        $this->assertSame(0, Attendance::count());
+        $this->assertSame($attendanceCount, Attendance::count());
     }
 
     public function test_request_tidak_dapat_mengganti_koordinat_pusat_backend(): void

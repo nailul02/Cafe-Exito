@@ -14,13 +14,13 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PaymentController extends Controller
 {
-    private const WITH = ['table', 'details.cancellations.refundItem.refundRequest', 'payment.verifier', 'payment.latestProof', 'payments.proofs', 'tickets'];
+    private const WITH = ['table', 'details.cancellations.refundItems.refundRequest', 'payment.verifier', 'payment.latestProof', 'payments.verifier', 'payments.latestProof', 'payments.proofs', 'tickets'];
 
     public function __construct(private readonly PaymentService $payments) {}
 
     public function verify(VerifyPaymentRequest $request, Payment $payment)
     {
-        $order = $this->payments->verify($payment, $request->user(), $request->validated('method'), $request->validated('amount_received'));
+        $order = $this->payments->verify($payment, $request->user(), $request->validated('method'), $request->validated('amount_received'), $request->validated('amount_applied'));
 
         return ApiResponse::success(OrderResource::make($order->load(self::WITH)), 'Pembayaran terverifikasi');
     }

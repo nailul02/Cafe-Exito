@@ -18,18 +18,16 @@ class RefundService
 {
     public function __construct(private readonly InAppNotificationService $notifications, private readonly AuditService $audit) {}
 
-    public function requestForCancellation(OrderItemCancellation $c, Payment $payment): ?RefundRequest
+    public function requestForCancellation(OrderItemCancellation $c, Payment $payment, int $amount): ?RefundRequest
     {
-        return DB::transaction(function () use ($c, $payment) {
+        return DB::transaction(function () use ($c, $payment, $amount) {
             $payment = Payment::query()->whereKey($payment->id)->lockForUpdate()->firstOrFail();
-            if ($payment->status->value !== 'verified') {
+            if ($payment->status->value !== 'verified' || $amount < 1) {
                 return null;
             }
-            $amount = $c->unit_price * $c->qty;
-            $reserved = (int) RefundRequest::query()->where('payment_id', $payment->id)->whereIn('status', ['requested', 'approved', 'completed'])->sum('amount');
-            if ($reserved + $amount > (int) $payment->amount) {
-                throw new DomainError('REFUND_LIMIT_EXCEEDED', 'Nilai refund melampaui nilai pembayaran.', 409);
-            }
+            $reserved = (int) RefundRequest::query()->where('payment_id', $payment->id)->whereIn('status', ['requested', 'conflict_of_interest', 'approved', 'completed'])->sum('amount');
+            $amount = min($amount, max(0, (int) $payment->amount - $reserved));
+            if ($amount < 1) return null;
             $request = RefundRequest::query()->where('payment_id', $payment->id)->where('status', 'requested')->lockForUpdate()->first();
             $new = ! $request;
             if ($new) {

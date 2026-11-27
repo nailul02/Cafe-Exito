@@ -23,7 +23,7 @@ class MenuResource extends JsonResource
             'sku' => $this->sku,
             'name' => $this->name,
             'price' => $this->price,
-            'cost_price' => $this->cost_price,
+            'cost_price' => in_array($request->user()?->role?->value, ['barista_kitchen', 'barista', 'kitchen'], true) ? null : $this->cost_price,
             'category' => ['id' => $this->category->id, 'name' => $this->category->name],
             'display_group' => $this->category->display_group->value,
             'station' => $this->station->value,

@@ -15,7 +15,7 @@ use Illuminate\Http\Request;
 
 class CashierController extends Controller
 {
-    private const WITH = ['table', 'details.cancellations.refundItem.refundRequest', 'payment.verifier', 'payment.latestProof', 'payments.proofs', 'tickets'];
+    private const WITH = ['table', 'details.cancellations.refundItems.refundRequest', 'payment.verifier', 'payment.latestProof', 'payments.verifier', 'payments.latestProof', 'payments.proofs', 'tickets'];
 
     public function dashboard(DashboardService $dashboard)
     {
@@ -25,7 +25,7 @@ class CashierController extends Controller
     /** Meja aktif yang dapat dipilih pada POS kasir. */
     public function tables()
     {
-        $tables = Table::query()->where('status', 'active')->orderBy('table_number')
+        $tables = Table::query()->numbered()->where('status', 'active')->orderByRaw('CAST(table_number AS INTEGER)')
             ->get(['id', 'table_number'])
             ->map(fn (Table $table) => ['id' => $table->id, 'table_number' => $table->table_number]);
 

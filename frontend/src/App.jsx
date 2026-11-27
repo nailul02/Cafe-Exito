@@ -13,6 +13,7 @@ import CartPage from './pages/customer/CartPage'
 import PaymentMethodPage from './pages/customer/PaymentMethodPage'
 import OrderConfirmationPage from './pages/customer/OrderConfirmationPage'
 import OrderStatusPage from './pages/customer/OrderStatusPage'
+import TableSessionPage from './pages/customer/TableSessionPage'
 import CashierDashboardPage from './pages/cashier/CashierDashboardPage'
 import CashierOrdersPage from './pages/cashier/CashierOrdersPage'
 import TransactionDetailPage from './pages/cashier/TransactionDetailPage'
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="payment" element={<PaymentMethodPage />} />
           <Route path="done" element={<OrderConfirmationPage />} />
           <Route path="status/:token" element={<OrderStatusPage />} />
+          <Route path="session" element={<TableSessionPage />} />
         </Route>
       </Route>
 
@@ -94,6 +96,7 @@ export default function App() {
       <Route element={<ProtectedRoute roles={['owner']} />}>
         <Route element={<ManagementLayout />}>
           <Route path="/owner" element={<OwnerDashboardPage />} />
+          <Route path="/owner/menus" element={<MenusPage />} />
           <Route path="/owner/production" element={<ProductionDashboardPage />} />
           <Route path="/owner/orders/cancellations" element={<OwnerOrderCancellationPage />} />
           <Route path="/owner/refunds" element={<RefundsPage />} />

@@ -20,7 +20,7 @@ use Illuminate\Support\Carbon;
  */
 class StationController extends Controller
 {
-    private const WITH = ['order.table', 'order.details', 'handler'];
+    private const WITH = ['order.table', 'order.details.cancellations', 'details.cancellations', 'handler'];
 
     public function __construct(private readonly TicketService $tickets) {}
 

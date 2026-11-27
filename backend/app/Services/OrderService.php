@@ -10,7 +10,9 @@ use App\Models\Menu;
 use App\Models\Order;
 use App\Models\OrderDetail;
 use App\Models\OrderItemCancellation;
+use App\Models\Payment;
 use App\Models\Table;
+use App\Models\TableSession;
 use App\Models\User;
 use App\Support\NumberGenerator;
 use Illuminate\Support\Facades\DB;
@@ -63,19 +65,64 @@ class OrderService
     /**
      * @param  array{table_number?:string, payment_method:string, service_type?:string, order_source?:string, customer_name?:string, items:list<array{menu_id:int, qty:int}>, client_request_id?:?string}  $data
      */
-    public function create(array $data, ?Table $tokenTable = null): Order
+    public function create(array $data, ?Table $tokenTable = null, ?TableSession $session = null): Order
     {
-        return DB::transaction(function () use ($data, $tokenTable) {
+        return DB::transaction(function () use ($data, $tokenTable, $session) {
+            if ($session) {
+                $session = TableSession::query()->whereKey($session->id)->lockForUpdate()->firstOrFail();
+                $session->loadMissing('table');
+                if ($session->status !== 'active' || $session->table->status !== 'active') {
+                    throw new DomainError('TABLE_SESSION_CLOSED', 'Sesi meja sudah ditutup.', 409);
+                }
+                if ($tokenTable && (int) $tokenTable->id !== (int) $session->table_id) {
+                    throw DomainError::tableInvalid('Sesi tidak sesuai dengan QR meja.');
+                }
+                $tokenTable = $session->table;
+            }
+            $serviceType = $data['service_type'] ?? 'dine_in';
+            if ($serviceType === 'dine_in' && $tokenTable && ! empty($data['table_number'])
+                && (string) $data['table_number'] !== (string) $tokenTable->table_number) {
+                throw DomainError::tableInvalid('Nomor meja tidak sesuai dengan QR yang dipindai.');
+            }
             if (! empty($data['client_request_id'])) {
+                if ($session) {
+                    $requestHash = hash('sha256', json_encode([
+                        'items' => $this->merge($data['items']), 'payment_method' => $data['payment_method'],
+                    ], JSON_THROW_ON_ERROR));
+                    $recorded = DB::table('table_session_order_requests')->where('table_session_id', $session->id)
+                        ->where('client_request_id', $data['client_request_id'])->lockForUpdate()->first();
+                    if ($recorded) {
+                        if (! hash_equals($recorded->payload_hash, $requestHash)) {
+                            throw new DomainError('IDEMPOTENCY_KEY_REUSED', 'ID checkout sudah digunakan untuk isi keranjang berbeda.', 409);
+                        }
+                        return Order::query()->findOrFail($recorded->order_id);
+                    }
+                    $session = TableSession::query()->whereKey($session->id)->lockForUpdate()->firstOrFail();
+                    if ($session->status !== 'active') throw new DomainError('TABLE_SESSION_CLOSED', 'Sesi meja sudah ditutup.', 409);
+                }
                 $existing = Order::query()->where('client_request_id', $data['client_request_id'])->first();
                 if ($existing) {
+                    if ($session) {
+                        // Customer retries are mapped atomically to their own session
+                        // above. A global request ID without that mapping is either
+                        // reused from another session or signals inconsistent data.
+                        throw new DomainError('IDEMPOTENCY_KEY_REUSED', 'ID checkout sudah digunakan oleh pesanan lain.', 409);
+                    }
+                    if ($tokenTable && (int) $existing->table_id !== (int) $tokenTable->id) {
+                        throw DomainError::tableInvalid('Permintaan ini sudah terikat ke meja QR lain.');
+                    }
                     return $existing; // permintaan ulang yang sama: kembalikan pesanan yang sama
                 }
             }
-            $serviceType = $data['service_type'] ?? 'dine_in';
             $table = null;
-            if (! empty($data['table_number'])) {
-                $table = Table::query()->where('table_number', (string) $data['table_number'])->where('status', 'active')->first();
+            $requestedTableNumber = $serviceType === 'dine_in'
+                ? ($tokenTable?->table_number ?? ($data['table_number'] ?? null))
+                : null;
+            if ($serviceType === 'dine_in' && empty($requestedTableNumber)) {
+                throw DomainError::tableInvalid('Pesanan dine-in wajib memiliki meja aktif.');
+            }
+            if ($requestedTableNumber !== null) {
+                $table = Table::query()->numbered()->where('table_number', (string) $requestedTableNumber)->where('status', 'active')->first();
                 if (! $table) {
                     throw DomainError::tableInvalid();
                 }
@@ -85,7 +132,8 @@ class OrderService
             }
 
             $merged = $this->merge($data['items']);
-            $menus = $this->availability->load(Menu::query()->whereIn('id', array_keys($merged))->get())->keyBy('id');
+            // Keep availability stable until order and payment rows are committed.
+            $menus = $this->availability->load(Menu::query()->whereIn('id', array_keys($merged))->orderBy('id')->lockForUpdate()->get())->keyBy('id');
             $total = 0;
             $rows = [];
             foreach ($merged as $menuId => $qty) {
@@ -107,22 +155,61 @@ class OrderService
                 ];
             }
 
+            if ($session) {
+                $inProgress = $session->orders()->where('status', OrderStatus::Diproses->value)->orderByDesc('id')->lockForUpdate()->first();
+                if ($inProgress) {
+                    $pending = $inProgress->payments()->where('status', PaymentStatus::Pending->value)->lockForUpdate()->first();
+                    if ($pending && $pending->method->value !== $data['payment_method']) {
+                        throw new DomainError('INSTALLMENT_METHOD_MISMATCH', 'Selesaikan atau gunakan metode pembayaran tertunda yang sama sebelum menambah pesanan.', 409);
+                    }
+                    if ($pending && $pending->proofs()->where('status', 'pending')->exists()) {
+                        throw new DomainError('PAYMENT_PROOF_PENDING', 'Tunggu verifikasi bukti pembayaran sebelum menambah item pada pesanan ini.', 409);
+                    }
+                    $added = $inProgress->details()->createMany($rows);
+                    $inProgress->update(['total' => (int) $inProgress->total + $total]);
+                    $payment = $pending ?: $inProgress->payments()->create([
+                        'method' => $data['payment_method'], 'status' => PaymentStatus::Pending->value, 'amount' => $total,
+                    ]);
+                    if ($pending) $payment->update(['amount' => (int) $payment->amount + $total]);
+                    PaymentAllocationService::attach($payment, $added->mapWithKeys(fn (OrderDetail $detail) => [$detail->id => (int) $detail->subtotal])->all());
+                    if ($data['payment_method'] === 'tunai') $this->tickets->createForDetails($inProgress, $added->all());
+                    if (! empty($data['client_request_id'])) {
+                        DB::table('table_session_order_requests')->insert([
+                            'table_session_id' => $session->id, 'order_id' => $inProgress->id,
+                            'client_request_id' => $data['client_request_id'],
+                            'payload_hash' => $requestHash, 'created_at' => now(), 'updated_at' => now(),
+                        ]);
+                    }
+                    $this->audit->record(null, 'order.items_added_to_session_order', 'order', $inProgress->id, ['detail_ids' => $added->pluck('id')->all(), 'total_delta' => $total]);
+                    return $inProgress->fresh();
+                }
+            }
+
             $order = Order::create([
                 'public_token' => (string) Str::ulid(),
                 'order_number' => NumberGenerator::next('EX', 'orders', 'order_number'),
                 'client_request_id' => $data['client_request_id'] ?? null,
                 'table_id' => $table?->id,
+                'table_session_id' => $session?->id,
                 'service_type' => $data['service_type'] ?? 'dine_in',
                 'order_source' => $data['order_source'] ?? 'qr_customer',
-                'customer_name' => $data['customer_name'] ?? null,
+                'customer_name' => $session?->customer_name ?? ($data['customer_name'] ?? null),
                 'status' => OrderStatus::MenungguPembayaran->value,
                 'ordered_at' => now(),
                 'total' => $total,
             ]);
-            $order->details()->createMany($rows);
-            $order->payments()->create(['method' => $data['payment_method'], 'status' => PaymentStatus::Pending->value, 'amount' => $total]);
+            $details = $order->details()->createMany($rows);
+            $payment = $order->payments()->create(['method' => $data['payment_method'], 'status' => PaymentStatus::Pending->value, 'amount' => $total]);
+            PaymentAllocationService::attach($payment, $details->mapWithKeys(fn (OrderDetail $detail) => [$detail->id => (int) $detail->subtotal])->all());
             if ($data['payment_method'] === 'tunai') {
-                $this->tickets->createForOrder($order);
+                $this->tickets->createForDetails($order, $details->all());
+            }
+            if ($session && ! empty($data['client_request_id'])) {
+                DB::table('table_session_order_requests')->insert([
+                    'table_session_id' => $session->id, 'order_id' => $order->id,
+                    'client_request_id' => $data['client_request_id'], 'payload_hash' => $requestHash,
+                    'created_at' => now(), 'updated_at' => now(),
+                ]);
             }
             $this->log->order($order, null, OrderStatus::MenungguPembayaran->value, null, 'Pesanan dibuat pelanggan');
 
@@ -168,22 +255,40 @@ class OrderService
                 throw new DomainError('INVALID_CANCELLATION_QUANTITY', 'Kuantitas melebihi jumlah yang belum dibatalkan.', 422, ['remaining' => $remaining]);
             }
             $qtyStart = (int) $detail->cancellations()->max('qty_end') + 1;
+            $qtyEnd = $qtyStart + $qty - 1;
             $cancellation = OrderItemCancellation::create(['order_id' => $order->id, 'order_detail_id' => $detail->id, 'qty' => $qty, 'qty_start' => $qtyStart, 'qty_end' => $qtyStart + $qty - 1, 'unit_price' => $detail->unit_price, 'source' => $source, 'actor_type' => $actor ? 'owner' : 'customer', 'actor_id' => $actor?->id, 'reason' => trim($reason), 'idempotency_key' => $key]);
-            $payment = $order->payments()->lockForUpdate()->latest('id')->first();
-            if ($payment?->status === PaymentStatus::Pending) {
-                $payment->update(['amount' => max(0, $payment->amount - $detail->unit_price * $qty)]);
-                $order->update(['total' => max(0, $order->total - $detail->unit_price * $qty)]);
-            } elseif ($payment?->status === PaymentStatus::Verified) {
-                $this->refunds->requestForCancellation($cancellation, $payment);
+            $payments = Payment::query()->where('order_id', $order->id)
+                ->whereHas('orderDetails', fn ($q) => $q->where('order_details.id', $detail->id))
+                ->whereIn('status', [PaymentStatus::Pending->value, PaymentStatus::Verified->value])
+                ->orderBy('id')->lockForUpdate()->get();
+            $order->update(['total' => max(0, $order->total - $detail->unit_price * $qty)]);
+            foreach ($payments as $payment) {
+                $allocation = (int) DB::table('payment_order_details')->where('payment_id', $payment->id)
+                    ->where('order_detail_id', $detail->id)->value('amount');
+                $cancelledAmount = PaymentAllocationService::amountForRange($allocation, (int) $detail->qty, $qtyStart, $qtyEnd);
+                if ($cancelledAmount < 1) continue;
+
+                if ($payment->status === PaymentStatus::Pending) {
+                    $newAmount = max(0, (int) $payment->amount - $cancelledAmount);
+                    if ($allocation === $cancelledAmount) {
+                        DB::table('payment_order_details')->where('payment_id', $payment->id)->where('order_detail_id', $detail->id)->delete();
+                    } else {
+                        DB::table('payment_order_details')->where('payment_id', $payment->id)->where('order_detail_id', $detail->id)
+                            ->update(['amount' => $allocation - $cancelledAmount, 'updated_at' => now()]);
+                    }
+                    $payment->update(['amount' => $newAmount, 'status' => $newAmount === 0 ? PaymentStatus::Cancelled->value : PaymentStatus::Pending->value]);
+                } else {
+                    $this->refunds->requestForCancellation($cancellation, $payment, $cancelledAmount);
+                }
             }
             $allCancelled = $order->details()->get()->every(fn ($d) => $d->qty <= (int) $d->cancellations()->sum('qty'));
             if ($allCancelled) {
                 $from = $order->status->value;
                 $order->update(['status' => OrderStatus::Dibatalkan->value, 'cancelled_at' => now(), 'cancel_reason' => trim($reason), 'cancelled_by' => $actor?->id]);
                 $this->log->order($order, $from, OrderStatus::Dibatalkan->value, $actor, trim($reason));
-                if ($payment?->status === PaymentStatus::Pending) {
-                    $payment->update(['status' => PaymentStatus::Cancelled->value]);
-                }
+                $pendingIds = $order->payments()->where('status', PaymentStatus::Pending->value)->pluck('id');
+                if ($pendingIds->isNotEmpty()) DB::table('payment_order_details')->whereIn('payment_id', $pendingIds)->delete();
+                $order->payments()->where('status', PaymentStatus::Pending->value)->update(['status' => PaymentStatus::Cancelled->value, 'amount' => 0]);
                 foreach ($order->tickets()->whereNull('started_at')->get() as $ticket) {
                     $ticket->update(['status' => TicketStatus::Dibatalkan->value, 'cancelled_at' => now()]);
                 }

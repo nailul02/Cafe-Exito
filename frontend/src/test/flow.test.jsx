@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
+import { customerApi } from '../api'
 import { AuthProvider } from '../context/AuthContext'
 import { CartProvider } from '../context/CartContext'
 import { ToastProvider } from '../context/ToastContext'
@@ -22,6 +23,12 @@ const login = async (user, username) => {
   await user.type(screen.getByLabelText(/password/i), 'password')
   await user.click(screen.getByRole('button', { name: 'Login' }))
 }
+const beginCustomerSession = async (user, tableNumber = '6', customerName = 'Pelanggan Test') => {
+  mount(`/order?t=demo-table-${String(tableNumber).padStart(2, '0')}`)
+  await user.type(await screen.findByLabelText('Nama pelanggan'), customerName)
+  await user.click(screen.getByTestId('start-order-submit'))
+  await screen.findByText('Es Kopi Susu')
+}
 
 const changedProperties = []
 const replaceProperty = (target, key, value) => {
@@ -38,6 +45,89 @@ afterEach(() => {
 })
 
 describe('alur lengkap dengan data mock', () => {
+  it('tidak menyediakan pilihan meja manual', async () => {
+    const user = userEvent.setup()
+    mount('/order/table')
+    expect(await screen.findByText('Arahkan kamera ke QR unik yang terpasang pada meja.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Meja / })).not.toBeInTheDocument()
+  })
+
+  it.each(['1', '8', '15'])('scan QR meja %s membuka sesi dengan nama pelanggan', async (number) => {
+    const user = userEvent.setup()
+    const open = vi.spyOn(customerApi, 'openSession')
+    mount(`/order?t=demo-table-${number.padStart(2, '0')}`)
+    const name = await screen.findByLabelText('Nama pelanggan')
+    await user.type(name, 'Budi Test')
+    await user.click(screen.getByTestId('start-order-submit'))
+    expect(await screen.findByText('Es Kopi Susu')).toBeInTheDocument()
+    expect(open).toHaveBeenCalledWith(`demo-table-${number.padStart(2, '0')}`, 'Budi Test')
+    expect(localStorage.getItem('exito.tableSessionToken')).toContain('mock-session-')
+  })
+
+  it('memulihkan sesi aktif saat QR yang sama dipindai dari perangkat lain', async () => {
+    const user = userEvent.setup()
+    const open = vi.spyOn(customerApi, 'openSession')
+    const first = mount('/order?t=demo-table-07')
+    await user.type(await screen.findByLabelText('Nama pelanggan'), 'Nana')
+    await user.click(screen.getByTestId('start-order-submit'))
+    expect(await screen.findByText('Es Kopi Susu')).toBeInTheDocument()
+    first.unmount()
+    const recovered = mount('/order?t=demo-table-07')
+    expect(await screen.findByText('Es Kopi Susu')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Nama pelanggan')).not.toBeInTheDocument()
+    expect(open).toHaveBeenLastCalledWith('demo-table-07')
+    recovered.unmount()
+    mount('/order/menu')
+    expect(await screen.findByText('Es Kopi Susu')).toBeInTheDocument()
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/order/menu')
+  })
+
+  it('menampilkan error dan retry untuk QR yang tidak dikenali', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(customerApi, 'openSession').mockRejectedValueOnce(new Error('QR meja tidak dikenali'))
+    mount('/order?t=invalid-qr')
+    expect(await screen.findByRole('alert')).toHaveTextContent('QR meja tidak dikenali')
+    expect(screen.getByRole('button', { name: 'Coba lagi' })).toBeInTheDocument()
+  })
+
+  it('QR menggunakan token dan resolver menolak nomor meja biasa', async () => {
+    const resolve = vi.spyOn(customerApi, 'table')
+    await customerApi.table('demo-table-01')
+    await expect(customerApi.table('1')).rejects.toThrow(/QR meja tidak dikenali/)
+    expect(resolve).toHaveBeenCalledWith('demo-table-01')
+  })
+
+  it('POS Kasir memilih meja dari daftar ID dan menampilkan nomor pada pesanan', async () => {
+    const user = userEvent.setup()
+    mount('/')
+    await login(user, 'ucup')
+    await user.click(await screen.findByTestId('new-pos-order-btn'))
+    await screen.findByRole('heading', { name: 'Buat Pesanan Baru (POS Kasir)' })
+
+    const tableOption = await screen.findByRole('option', { name: 'Meja 15' })
+    await user.selectOptions(screen.getByRole('combobox'), tableOption.value)
+    await user.click(screen.getByRole('heading', { name: 'Es Kopi Susu' }))
+    await user.click(screen.getByRole('button', { name: 'Buat Pesanan' }))
+
+    expect(await screen.findByText(/Meja 15/)).toBeInTheDocument()
+  })
+
+  it('menampilkan atau menyembunyikan kata sandi tanpa mengubah nilainya', async () => {
+    const user = userEvent.setup()
+    mount('/manager/reports')
+    const password = await screen.findByTestId('login-password')
+    await user.type(password, 'password')
+    expect(password).toHaveAttribute('type', 'password')
+
+    await user.click(screen.getByRole('button', { name: 'Tampilkan kata sandi' }))
+    expect(password).toHaveAttribute('type', 'text')
+    expect(password).toHaveValue('password')
+
+    await user.click(screen.getByRole('button', { name: 'Sembunyikan kata sandi' }))
+    expect(password).toHaveAttribute('type', 'password')
+    expect(password).toHaveValue('password')
+  })
+
   it('deep link staf tanpa sesi diarahkan ke login dan tujuan asal dipertahankan', async () => {
     const user = userEvent.setup()
     mount('/manager/reports')
@@ -54,7 +144,7 @@ describe('alur lengkap dengan data mock', () => {
     await screen.findByText('Manager Dashboard')
     await user.click(screen.getByRole('link', { name: 'Meja & QR' }))
     expect(await screen.findByRole('heading', { name: 'Meja & QR' })).toBeInTheDocument()
-    expect(await screen.findByText('Tautan QR')).toBeInTheDocument()
+    expect(await screen.findByText('QR Code unik')).toBeInTheDocument()
   })
 
   it('QRIS Self-Order wajib memiliki bukti dan tidak bisa diubah menjadi tunai', () => {
@@ -84,30 +174,28 @@ describe('alur lengkap dengan data mock', () => {
 
   it('pelanggan memesan → status menunggu pembayaran', async () => {
     const user = userEvent.setup()
-    mount('/order/table')
-    await user.type(await screen.findByLabelText('Nomor meja'), '6')
-    await user.click(screen.getByRole('button', { name: 'Mulai memesan' }))
+    await beginCustomerSession(user, '6')
     expect(await screen.findByText('Es Kopi Susu')).toBeInTheDocument()
     await user.click(screen.getAllByRole('button', { name: 'Tambah' })[0])
     await user.click(await screen.findByRole('button', { name: /Lihat Keranjang/ }))
     expect(await screen.findByText('Keranjang Anda')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pilih Metode Pembayaran' })).toBeEnabled())
     await user.click(screen.getByRole('button', { name: 'Pilih Metode Pembayaran' }))
     await user.click(await screen.findByRole('button', { name: 'Tunai' }))
     await user.click(screen.getByRole('button', { name: /Pesan Sekarang/ }))
     expect(await screen.findByText(/Pesanan\s*Diterima/)).toBeInTheDocument()
+    expect(await screen.findByText(/Meja 6/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Lihat Status Pesanan' }))
     expect(await screen.findByText(/Menunggu pembayaran/)).toBeInTheDocument()
   })
 
   it('pelanggan membatalkan sebagian kuantitas dengan alasan wajib', async () => {
     const user = userEvent.setup()
-    mount('/order/table')
-    await user.type(await screen.findByLabelText('Nomor meja'), '6')
-    await user.click(screen.getByRole('button', { name: 'Mulai memesan' }))
-    await screen.findByText('Es Kopi Susu')
+    await beginCustomerSession(user, '6')
     const add = screen.getAllByRole('button', { name: 'Tambah' })[0]
     await user.click(add); await user.click(add)
     await user.click(await screen.findByRole('button', { name: /Lihat Keranjang/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pilih Metode Pembayaran' })).toBeEnabled())
     await user.click(screen.getByRole('button', { name: 'Pilih Metode Pembayaran' }))
     await user.click(await screen.findByRole('button', { name: 'Tunai' }))
     await user.click(screen.getByRole('button', { name: /Pesan Sekarang/ }))
@@ -188,7 +276,7 @@ describe('alur lengkap dengan data mock', () => {
     await user.click(screen.getByRole('button', { name: 'Login' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/salah/i))
     expect(screen.getByRole('dialog', { name: 'Login Karyawan' })).toBeInTheDocument()
-    expect(screen.getByText('Es Kopi Susu')).toBeInTheDocument()
+    expect(await screen.findByText('Es Kopi Susu')).toBeInTheDocument()
   })
 
   it('modul stok tidak tersedia pada navigasi Manager', async () => {
@@ -198,6 +286,29 @@ describe('alur lengkap dengan data mock', () => {
     expect(await screen.findByRole('link', { name: 'Dashboard' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Kelola Stok' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Pembelian' })).not.toBeInTheDocument()
+  })
+
+  it('Manager hanya melihat status menu dan tidak mendapat widget pengaturan ketersediaan', async () => {
+    const user = userEvent.setup()
+    mount('/')
+    await login(user, 'manager')
+    await user.click(await screen.findByRole('link', { name: 'Kelola Menu' }))
+    expect(await screen.findByRole('heading', { name: 'Kelola Data Menu' })).toBeInTheDocument()
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /Ketersediaan Menu/ })).not.toBeInTheDocument()
+  })
+
+  it('stasiun Barista hanya melihat minuman dan dapat mengubah statusnya', async () => {
+    const user = userEvent.setup()
+    mount('/')
+    await login(user, 'nana')
+    await user.click(await screen.findByRole('link', { name: 'Antrean Produksi' }))
+    expect(await screen.findByRole('heading', { name: 'Ketersediaan Menu Minuman' })).toBeInTheDocument()
+    const panel = screen.getByRole('region', { name: 'Ketersediaan Menu Minuman' })
+    await waitFor(() => expect(panel.textContent).toContain('Es Kopi Susu'))
+    expect(panel.textContent).not.toContain('Nasi Goreng Exito')
+    await user.click(panel.querySelector('button[aria-label="Tandai habis: Es Kopi Susu"]'))
+    await waitFor(() => expect(panel.querySelector('button[aria-label="Tandai tersedia: Es Kopi Susu"]')).toBeInTheDocument())
   })
 
   it('owner login dan diarahkan ke /owner', async () => {
@@ -320,12 +431,10 @@ describe('alur lengkap dengan data mock', () => {
 
   it('pelanggan mengunggah bukti QRIS tanpa melunasi payment otomatis', async () => {
     const user = userEvent.setup()
-    mount('/order/table')
-    await user.type(await screen.findByLabelText('Nomor meja'), '6')
-    await user.click(screen.getByRole('button', { name: 'Mulai memesan' }))
-    await screen.findByText('Es Kopi Susu')
+    await beginCustomerSession(user, '6')
     await user.click(screen.getAllByRole('button', { name: 'Tambah' })[0])
     await user.click(await screen.findByRole('button', { name: /Lihat Keranjang/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pilih Metode Pembayaran' })).toBeEnabled())
     await user.click(screen.getByRole('button', { name: 'Pilih Metode Pembayaran' }))
     await user.click(await screen.findByRole('button', { name: 'QRIS' }))
     await user.click(screen.getByRole('button', { name: /Pesan Sekarang/ }))

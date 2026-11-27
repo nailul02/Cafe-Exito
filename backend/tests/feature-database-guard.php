@@ -6,10 +6,11 @@ use Illuminate\Support\Facades\DB;
 foreach ([
     'APP_ENV' => 'testing',
     'DB_CONNECTION' => 'pgsql',
-    'DB_DATABASE' => 'cafe_exito_test',
+    'DB_DATABASE' => 'cafe_exito',
     'DB_HOST' => '127.0.0.1',
     'DB_PORT' => '5432',
     'DB_USERNAME' => 'cafe_exito_user',
+    'DB_SEARCH_PATH' => 'public',
     'DB_URL' => '',
 ] as $name => $value) {
     putenv("$name=$value");
@@ -27,7 +28,7 @@ $expected = [
     'driver' => 'pgsql',
     'host' => '127.0.0.1',
     'port' => '5432',
-    'database' => 'cafe_exito_test',
+    'database' => 'cafe_exito',
     'username' => 'cafe_exito_user',
     'search_path' => 'public',
 ];
@@ -43,13 +44,13 @@ if (! empty($connection['url'])) {
     throw new RuntimeException('Feature DB guard refused: Laravel DB_URL must be empty.');
 }
 
-$identity = DB::selectOne('SELECT current_database() AS database, current_user AS username, current_schema() AS schema');
+$identity = DB::selectOne('SELECT current_database() AS database, current_user AS username, current_schema() AS schema, inet_server_addr() AS server');
 
-if ($identity->database !== 'cafe_exito_test'
+if ($identity->database !== 'cafe_exito'
     || $identity->username !== 'cafe_exito_user'
     || $identity->schema !== 'public'
-    || $identity->database === 'cafe_exito') {
-    throw new RuntimeException('Feature DB guard refused: PostgreSQL identity did not match the approved test target.');
+    || $identity->server !== '127.0.0.1') {
+    throw new RuntimeException('Feature DB guard refused: PostgreSQL identity did not match the approved local cafe_exito.public target.');
 }
 
-fwrite(STDOUT, "Feature DB guard passed: cafe_exito_test / cafe_exito_user / public.\n");
+fwrite(STDOUT, "Feature DB guard passed: local cafe_exito.public / cafe_exito_user.\n");

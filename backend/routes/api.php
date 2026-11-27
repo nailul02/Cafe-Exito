@@ -9,9 +9,11 @@ use App\Http\Controllers\Api\V1\Attendance\AttendanceController;
 use App\Http\Controllers\Api\V1\Attendance\AttendancePhotoController;
 use App\Http\Controllers\Api\V1\Cashier\CashierController;
 use App\Http\Controllers\Api\V1\Cashier\PaymentController;
+use App\Http\Controllers\Api\V1\Cashier\TableSessionController as CashierTableSessionController;
 use App\Http\Controllers\Api\V1\Cashier\PosOrderController;
 use App\Http\Controllers\Api\V1\Customer\CatalogController;
 use App\Http\Controllers\Api\V1\Customer\CustomerOrderController;
+use App\Http\Controllers\Api\V1\Customer\TableSessionController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\Order\OrderController;
 use App\Http\Controllers\Api\V1\Order\TransactionController;
@@ -43,15 +45,23 @@ Route::prefix('auth')->group(function () {
 });
 
 // ---------------------------------------------------------------- Pelanggan (tanpa login)
-Route::prefix('customer')->middleware(['throttle:customer', 'table.token'])->group(function () {
+Route::prefix('customer')->middleware('throttle:customer')->group(function () {
     Route::get('tables/{qrToken}', [CatalogController::class, 'table']);
+    Route::post('sessions/open', [TableSessionController::class, 'open']);
     Route::get('menus', [CatalogController::class, 'menus']);
-    Route::post('cart/validate', [CatalogController::class, 'validateCart']);
     Route::get('payment-info', [CatalogController::class, 'paymentInfo']);
-    Route::post('orders', [CustomerOrderController::class, 'store']);
-    Route::get('orders/{publicToken}', [CustomerOrderController::class, 'show']);
-    Route::post('orders/{publicToken}/cancel', [CustomerOrderController::class, 'cancel']);
-    Route::post('orders/{publicToken}/payment-proof', [CustomerOrderController::class, 'uploadProof'])->middleware('throttle:customer-proof');
+    Route::middleware('table.session')->group(function () {
+        Route::get('sessions/current', [TableSessionController::class, 'current']);
+        Route::post('cart/validate', [CatalogController::class, 'validateCart']);
+        Route::post('sessions/orders', [CustomerOrderController::class, 'store']);
+        // Keep existing customer clients working while requiring the session credential.
+        Route::post('orders', [CustomerOrderController::class, 'store']);
+        Route::get('orders/{publicToken}', [CustomerOrderController::class, 'show']);
+        Route::post('sessions/orders/{publicToken}/cancel', [CustomerOrderController::class, 'cancel']);
+        Route::post('sessions/orders/{publicToken}/payment-proof', [CustomerOrderController::class, 'uploadProof'])->middleware('throttle:customer-proof');
+        Route::post('orders/{publicToken}/cancel', [CustomerOrderController::class, 'cancel']);
+        Route::post('orders/{publicToken}/payment-proof', [CustomerOrderController::class, 'uploadProof'])->middleware('throttle:customer-proof');
+    });
 });
 
 // ---------------------------------------------------------------- Staf (bearer token)
@@ -78,6 +88,9 @@ Route::middleware(['auth:sanctum', 'active', 'throttle:staff'])->group(function 
         Route::post('pos/orders', [PosOrderController::class, 'store'])->middleware('permission:orders.create_pos');
         Route::post('orders/{order}/complete', [CashierController::class, 'completeOrder'])->middleware('permission:payments.verify');
         Route::middleware('permission:payments.verify')->group(function () {
+            Route::get('sessions', [CashierTableSessionController::class, 'index']);
+            Route::get('sessions/{tableSession}', [CashierTableSessionController::class, 'show']);
+            Route::post('sessions/{tableSession}/close', [CashierTableSessionController::class, 'close']);
             Route::get('orders', [CashierController::class, 'orders']);
             Route::get('orders/{order}', [CashierController::class, 'order']);
             Route::post('payments/{payment}/verify', [PaymentController::class, 'verify']);
@@ -133,8 +146,8 @@ Route::middleware(['auth:sanctum', 'active', 'throttle:staff'])->group(function 
             Route::post('menus', [AdminMenuController::class, 'store']);
             Route::put('menus/{menu}', [AdminMenuController::class, 'update']);
             Route::delete('menus/{menu}', [AdminMenuController::class, 'destroy']);
-            Route::patch('menus/{menu}/availability', [AdminMenuController::class, 'availability']);
         });
+        Route::patch('menus/{menu}/availability', [AdminMenuController::class, 'availability'])->middleware('permission:menus.availability');
         Route::middleware('permission:tables.manage')->group(function () {
             Route::get('tables', [TableController::class, 'index']);
             Route::post('tables', [TableController::class, 'store']);

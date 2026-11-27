@@ -5,15 +5,17 @@ import { ApiError } from './ApiError'
 
 export const http = axios.create({
   baseURL: env.apiBaseUrl,
-  timeout: 15000,
+  timeout: 30000,
   headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
 })
 
 http.interceptors.request.use((config) => {
   const token = tokenStorage.get()
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  const tableToken = tokenStorage.getTable()
-  if (tableToken && config.url?.startsWith('/customer')) config.headers['X-Table-Token'] = tableToken
+  if (token && !config.url?.startsWith('/customer/')) config.headers.Authorization = `Bearer ${token}`
+  const sessionToken = tokenStorage.getTableSession()
+  if (sessionToken && config.url?.startsWith('/customer/') && !config.url.startsWith('/customer/sessions/open')) {
+    config.headers['X-Table-Session'] = sessionToken
+  }
   return config
 })
 
@@ -26,6 +28,7 @@ http.interceptors.response.use(
       tokenStorage.clear()
       window.dispatchEvent(new Event('auth:expired'))
     }
+    if (res?.status === 401 && err.config?.url?.startsWith('/customer/')) tokenStorage.setTableSession(null)
     throw new ApiError({
       status: res?.status ?? 0,
       code: body.error?.code || (res ? 'HTTP_' + res.status : 'NETWORK_ERROR'),

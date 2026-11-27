@@ -124,6 +124,11 @@ return new class extends Migration {
 
     public function down(): void
     {
+        foreach (['refund_executions', 'refund_request_items', 'refund_requests', 'order_item_cancellations', 'refund_events', 'refund_conflict_notes'] as $table) {
+            if (Schema::hasTable($table) && DB::table($table)->exists()) {
+                throw new RuntimeException("Cannot roll back customer cancellation/refund support while [$table] contains financial or historical records.");
+            }
+        }
         Schema::dropIfExists('app_notifications');
         Schema::dropIfExists('refund_conflict_notes');
         Schema::dropIfExists('refund_executions');

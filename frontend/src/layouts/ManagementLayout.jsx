@@ -39,7 +39,7 @@ export default function ManagementLayout() {
             </NavLink>
           ))}
         </nav>
-        <button onClick={onLogout} className="rounded-xl px-3 py-2.5 text-left text-[15px] font-medium text-bad hover:bg-bad-soft">Keluar</button>
+        <button data-testid="staff-logout-btn" onClick={onLogout} className="rounded-xl px-3 py-2.5 text-left text-[15px] font-medium text-bad hover:bg-bad-soft">Keluar</button>
       </aside>
       {open && <div className="fixed inset-0 z-30 bg-brand-ink/40 lg:hidden" onClick={() => setOpen(false)} aria-hidden />}
       <div className="flex min-w-0 flex-1 flex-col">

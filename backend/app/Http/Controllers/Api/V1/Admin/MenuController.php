@@ -12,6 +12,7 @@ use App\Services\MenuAvailabilityService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 
 class MenuController extends Controller
 {
@@ -20,7 +21,7 @@ class MenuController extends Controller
     public function index(Request $request)
     {
         $search = trim((string) $request->query('search', ''));
-        $menus = Menu::query()->when($search !== '', function ($q) use ($search) {
+        $menus = $this->availability->scopeForUser(Menu::query(), $request->user())->when($search !== '', function ($q) use ($search) {
             $like = '%'.addcslashes($search, '%_\\').'%';
             $q->where(fn ($w) => $w->where('name', 'ilike', $like)->orWhere('sku', 'ilike', $like));
         })->orderBy('name')->get();
@@ -28,8 +29,9 @@ class MenuController extends Controller
         return ApiResponse::success(MenuResource::collection($this->availability->load($menus)));
     }
 
-    public function show(Menu $menu)
+    public function show(Request $request, Menu $menu)
     {
+        abort_unless($this->availability->scopeForUser(Menu::query(), $request->user())->whereKey($menu->id)->exists(), 404);
         return ApiResponse::success(MenuResource::make($this->availability->load($menu->newCollection([$menu]))->first()));
     }
 
@@ -61,19 +63,29 @@ class MenuController extends Controller
         return ApiResponse::success(null, 'Menu dihapus');
     }
 
-    /** Saklar manual. Ketersediaan efektif tetap mengikuti stok (dihitung dinamis). */
+    /** Ketersediaan manual; role dan station tetap divalidasi di backend. */
     public function availability(Request $request, Menu $menu)
     {
+        abort_unless($this->availability->mayChange($request->user(), $menu), 403);
         $data = $request->validate(['is_available' => ['required', 'boolean']]);
-        $menu->update($data);
-        $this->audit->record($request->user(), 'menu.availability_changed', 'menu', $menu->id, $data);
+        $before = (bool) $menu->is_available;
+        DB::transaction(function () use ($menu, $data): void {
+            $locked = Menu::query()->lockForUpdate()->findOrFail($menu->id);
+            $locked->update($data);
+            $menu->setRawAttributes($locked->getAttributes(), true);
+        });
+        $this->audit->record($request->user(), 'menu.availability_changed', 'menu', $menu->id, ['from' => $before, 'to' => (bool) $menu->is_available]);
 
         return ApiResponse::success(MenuResource::make($this->fresh($menu)));
     }
 
-    public function categories()
+    public function categories(Request $request)
     {
-        return ApiResponse::success(MenuCategory::query()->orderBy('sort_order')->orderBy('name')->get()->map(fn ($c) => [
+        $categories = MenuCategory::query();
+        if (in_array($request->user()->role->value, ['barista_kitchen', 'barista', 'kitchen'], true)) {
+            $categories->where('station', $request->user()->station?->value ?? 'invalid');
+        }
+        return ApiResponse::success($categories->orderBy('sort_order')->orderBy('name')->get()->map(fn ($c) => [
             'id' => $c->id, 'name' => $c->name, 'display_group' => $c->display_group->value, 'station' => $c->station->value,
         ])->all());
     }

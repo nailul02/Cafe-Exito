@@ -22,7 +22,7 @@ export default function CashierOrdersPage() {
   const res = useResource(() => cashierApi.orders({ 'filter[status]': filter, search }), [filter, search], { poll: true })
   const columns = [
     { key: 'no', header: 'No', render: (o) => o.display_number },
-    { key: 'meja', header: 'Meja / Layanan', render: (o) => o.table?.number ? `Meja ${String(o.table.number).padStart(2, '0')}` : `Takeaway (${o.customer_name || 'Bungkus'})` },
+    { key: 'meja', header: 'Meja / Layanan', render: (o) => o.table?.number ? `Meja ${o.table.number}` : `Takeaway (${o.customer_name || 'Bungkus'})` },
     { key: 'total', header: 'Total', align: 'right', render: (o) => rupiah(o.total) },
     { key: 'bayar', header: 'Pembayaran', render: (o) => <span>{o.payment?.method?.label}<small className="block opacity-75">{o.payment?.status?.label}</small></span> },
     { key: 'status', header: 'Status', render: (o) => ORDER_STATUS[o.status.code]?.label },

@@ -29,6 +29,7 @@ export default function OrderConfirmationPage() {
       <div className="mt-auto w-full space-y-3 pb-6 pt-8">
         <DevNote>Layar petunjuk pembayaran tidak ada di Figma. Gambar QRIS statis diambil dari pengaturan backend (K-T8).</DevNote>
         <Button size="lg" block onClick={() => navigate(`/order/status/${last.token}`)}>Lihat Status Pesanan</Button>
+        <Button size="lg" block variant="sand" onClick={() => navigate('/order/session')}>Lihat Tagihan dan Riwayat Sesi</Button>
         <Button size="lg" block variant="primary" onClick={() => navigate('/order/menu')}>Pesan Lagi</Button>
       </div>
     </div>

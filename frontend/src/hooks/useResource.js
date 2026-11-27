@@ -11,14 +11,20 @@ export function useResource(fetcher, deps = [], { poll = false, interval = env.p
   const fetchRef = useRef(fetcher)
   fetchRef.current = fetcher
   const alive = useRef(true)
+  const inFlight = useRef(0)
 
   const run = useCallback(async (silent = false) => {
+    // Polling must not queue another request while the previous poll is still pending.
+    if (silent && inFlight.current > 0) return
+    inFlight.current += 1
     if (!silent) setState((s) => ({ ...s, loading: true, error: null }))
     try {
       const data = await fetchRef.current()
       if (alive.current) setState({ data, error: null, loading: false })
     } catch (error) {
       if (alive.current) setState((s) => ({ data: silent ? s.data : null, error: silent ? s.error : error, loading: false }))
+    } finally {
+      inFlight.current -= 1
     }
   }, [])
 

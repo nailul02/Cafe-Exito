@@ -30,7 +30,7 @@ export default function StationLayout() {
             </NavLink>
           ))}
         </nav>
-        <button onClick={onLogout} className="rounded-xl px-4 py-3 text-left text-white/85 hover:bg-white/10">Keluar</button>
+        <button data-testid="staff-logout-btn" onClick={onLogout} className="rounded-xl px-4 py-3 text-left text-white/85 hover:bg-white/10">Keluar</button>
       </aside>
       {open && <div className="fixed inset-0 z-30 bg-brand-ink/40 lg:hidden" onClick={() => setOpen(false)} aria-hidden />}
       <div className="flex min-w-0 flex-1 flex-col">

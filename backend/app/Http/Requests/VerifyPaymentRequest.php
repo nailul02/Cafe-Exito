@@ -8,6 +8,10 @@ class VerifyPaymentRequest extends ApiRequest
 {
     public function rules(): array
     {
-        return ['method' => ['nullable', Rule::in(['tunai', 'qris'])], 'amount_received' => ['nullable', 'integer', 'min:0']];
+        return [
+            'method' => ['nullable', Rule::in(['tunai', 'qris'])],
+            'amount_received' => ['nullable', 'integer', 'min:0'],
+            'amount_applied' => ['nullable', 'integer', 'min:1'],
+        ];
     }
 }

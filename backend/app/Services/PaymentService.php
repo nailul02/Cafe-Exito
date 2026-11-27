@@ -31,15 +31,26 @@ class PaymentService
      * @param  ?string  $method  koreksi metode oleh kasir (opsional; K-T9 ASUMSI, tercatat di audit)
      * @param  ?int  $amountReceived  uang diterima (tunai); bila kosong dianggap pas sebesar tagihan
      */
-    public function verify(Payment $payment, User $cashier, ?string $method = null, ?int $amountReceived = null): Order
+    public function verify(Payment $payment, User $cashier, ?string $method = null, ?int $amountReceived = null, ?int $amountApplied = null): Order
     {
-        return DB::transaction(function () use ($payment, $cashier, $method, $amountReceived) {
+        return DB::transaction(function () use ($payment, $cashier, $method, $amountReceived, $amountApplied) {
             $orderId = Payment::query()->whereKey($payment->id)->value('order_id');
             $order = Order::query()->whereKey($orderId)->lockForUpdate()->firstOrFail();
             $payment = Payment::query()->whereKey($payment->id)->lockForUpdate()->firstOrFail();
 
             if ($payment->status !== PaymentStatus::Pending) {
                 throw DomainError::paymentAlreadyProcessed();
+            }
+            $requestedAmount = (int) $payment->amount;
+            $amountApplied ??= $requestedAmount;
+            if ($amountApplied < 1 || $amountApplied > $requestedAmount) {
+                throw new DomainError('PAYMENT_AMOUNT_INVALID', 'Jumlah pembayaran terverifikasi harus positif dan tidak melebihi cicilan ini.', 422);
+            }
+            $alreadyVerified = (int) $order->payments()->whereIn('status', [PaymentStatus::Verified->value, PaymentStatus::Refunded->value])->where('id', '<>', $payment->id)->sum('amount');
+            $executedRefunds = (int) \App\Models\RefundRequest::query()->where('order_id', $order->id)->where('status', 'completed')->sum('amount');
+            $outstanding = max(0, (int) $order->total - max(0, $alreadyVerified - $executedRefunds));
+            if ($amountApplied > $outstanding) {
+                throw new DomainError('PAYMENT_EXCEEDS_BALANCE', 'Jumlah pembayaran melebihi sisa tagihan pesanan.', 409, ['balance' => $outstanding]);
             }
             if ($payment->method === PaymentMethod::Qris && $method === PaymentMethod::Tunai->value) {
                 throw ValidationException::withMessages(['method' => 'Pembayaran QRIS tidak dapat diubah menjadi tunai saat verifikasi.']);
@@ -53,7 +64,7 @@ class PaymentService
                 }
             }
             $orderAlreadyCompleted = $order->status === OrderStatus::Selesai;
-            if (! $orderAlreadyCompleted && ! $order->status->canTransitionTo(OrderStatus::Dibayar)) {
+            if ($order->status === OrderStatus::Dibatalkan) {
                 throw DomainError::invalidTransition('Pesanan', $order->status->value, OrderStatus::Dibayar->value);
             }
 
@@ -63,10 +74,10 @@ class PaymentService
                 $payment->method = PaymentMethod::from($method);
             }
             if ($payment->method === PaymentMethod::Tunai) {
-                if ($amountReceived !== null && $amountReceived < $payment->amount) {
-                    throw DomainError::amountTooLow($payment->amount);
+                if ($amountReceived !== null && $amountReceived < $amountApplied) {
+                    throw DomainError::amountTooLow($amountApplied);
                 }
-                $payment->amount_received = $amountReceived ?? $payment->amount;
+                $payment->amount_received = $amountReceived ?? $amountApplied;
             } else {
                 $payment->amount_received = null;
             }
@@ -74,20 +85,37 @@ class PaymentService
                 $this->proofs->review($payment, $cashier, true);
             }
 
+            $remainderAllocations = $amountApplied < $requestedAmount
+                ? PaymentAllocationService::splitPending($payment, $amountApplied)
+                : [];
             $payment->fill([
                 'status' => PaymentStatus::Verified->value,
+                'amount' => $amountApplied,
                 'paid_at' => now(),
                 'verified_by' => $cashier->id,
                 'transaction_number' => NumberGenerator::next('TRX', 'payments', 'transaction_number'),
             ])->save();
 
+            if ($amountApplied < $requestedAmount) {
+                $remainder = $order->payments()->create([
+                    'method' => $payment->method->value, 'status' => PaymentStatus::Pending->value,
+                    'amount' => $requestedAmount - $amountApplied,
+                ]);
+                PaymentAllocationService::attach($remainder, $remainderAllocations);
+            }
+
+            $verifiedNet = (int) $order->payments()->whereIn('status', [PaymentStatus::Verified->value, PaymentStatus::Refunded->value])->sum('amount') - $executedRefunds;
             if ($orderAlreadyCompleted) {
                 // Completion is an operational state; recording payment later must not undo it.
-                $order->update(['paid_at' => now()]);
-            } else {
+                if ($verifiedNet >= (int) $order->total) $order->update(['paid_at' => now()]);
+            } elseif ($verifiedNet >= (int) $order->total && $order->status === OrderStatus::MenungguPembayaran) {
                 $from = $order->status->value;
                 $order->update(['status' => OrderStatus::Dibayar->value, 'paid_at' => now()]);
                 $this->log->order($order, $from, OrderStatus::Dibayar->value, $cashier, 'Pembayaran diverifikasi');
+            } elseif ($verifiedNet >= (int) $order->total) {
+                $order->update(['paid_at' => now()]);
+            }
+            if ($payment->method === PaymentMethod::Qris && $verifiedNet >= (int) $order->total) {
                 $this->tickets->createForOrder($order, $cashier);
             }
             $this->audit->record($cashier, 'payment.verified', 'payment', $payment->id, array_filter(['order_id' => $order->id, 'method_changed' => $changedMethod]));
@@ -119,7 +147,7 @@ class PaymentService
             }
             $payment->update(['status' => PaymentStatus::Rejected->value, 'reject_reason' => $reason, 'verified_by' => $cashier->id]);
             if ($order->order_source !== 'qr_customer') {
-                $this->orders->markCancelled($order, $reason, $cashier);
+                if (! $order->table_session_id) $this->orders->markCancelled($order, $reason, $cashier);
             }
             $this->audit->record($cashier, 'payment.rejected', 'payment', $payment->id, ['order_id' => $order->id, 'reason' => $reason]);
 

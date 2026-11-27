@@ -1,4 +1,4 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { stationApi } from '../../api'
 import { useAuth } from '../../context/AuthContext'
@@ -12,6 +12,7 @@ import { AsyncView } from '../../components/ui/States'
 import { Card, StatCard } from '../../components/ui/Card'
 import { timeHM } from '../../lib/format'
 import { cn } from '../../lib/cn'
+import MenuAvailabilityPanel from '../../components/menus/MenuAvailabilityPanel'
 
 const STATUS_FILTERS = [
   { value: 'semua', label: 'Semua Status' },
@@ -26,6 +27,7 @@ const WORD = { antre: 'Menunggu', diproses: 'Diproses', selesai: 'Selesai', diba
 export default function ProductionDashboardPage() {
   const { user } = useAuth()
   const rawRole = user?.role?.code || user?.role
+  const isStationUser = ['barista_kitchen', 'barista', 'kitchen'].includes(rawRole)
   const ownStation = user?.station || (rawRole === 'kitchen' ? 'kitchen' : 'barista')
   const [searchParams, setSearchParams] = useSearchParams()
   const canViewBoth = (user?.permissions || []).includes('queue.view_all')
@@ -77,6 +79,8 @@ export default function ProductionDashboardPage() {
         title={canViewBoth ? 'Monitoring Antrean Produksi' : 'Dashboard Produksi'}
         subtitle={`Selamat bertugas, ${userName}! Kelola antrean ${stationLabel.toLowerCase()} di stasiun ${station === 'barista' ? 'Barista' : 'Kitchen'}.`}
       />
+
+      {isStationUser && <MenuAvailabilityPanel title={`Ketersediaan Menu ${ownStation === 'barista' ? 'Minuman' : 'Makanan & Cemilan'}`} />}
 
       {canViewBoth && (
         <div className="mt-5 flex gap-2" role="tablist" aria-label="Pilih antrean produksi">
@@ -141,7 +145,7 @@ export default function ProductionDashboardPage() {
           {(rows) => (
             <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {rows.map((t) => (
-                <li key={t.id}>
+                <li key={t.id} data-testid={`ticket-card-${t.id}`}>
                   <Card surface="brown" className="flex h-full flex-col justify-between gap-3 p-5">
                     <div>
                       <div className="flex items-start justify-between gap-2">
@@ -181,7 +185,7 @@ export default function ProductionDashboardPage() {
                         {t.items.map((i, idx) => (
                           <li key={idx} className="flex items-center justify-between gap-2 text-base font-medium">
                             <span>{i.name}</span>
-                            <span className="flex items-center gap-2"><span className="font-bold text-accent">×{i.qty}</span>{canAct && i.qty > 0 && !i.started_at && <Button size="sm" variant="accent" loading={busy} onClick={() => startItem(t, i)}>Mulai</Button>}{i.started_at && <span className="text-xs text-white/75">Diproses</span>}</span>
+                            <span className="flex items-center gap-2"><span className="font-bold text-accent">×{i.qty}</span>{canAct && i.qty > 0 && !i.started_at && <Button data-testid={`start-item-btn-${i.order_detail_id || idx}`} size="sm" variant="accent" loading={busy} onClick={() => startItem(t, i)}>Mulai</Button>}{i.started_at && <span className="text-xs text-white/75">Diproses</span>}</span>
                           </li>
                         ))}
                       </ul>
@@ -189,14 +193,14 @@ export default function ProductionDashboardPage() {
 
                     {/* Tombol Aksi */}
                     <div className="mt-2 flex items-center justify-between border-t border-white/10 pt-3">
-                      <Button size="sm" variant="sand" onClick={() => setDetail(t)}>
+                      <Button data-testid={`detail-ticket-btn-${t.id}`} size="sm" variant="sand" onClick={() => setDetail(t)}>
                         Detail
                       </Button>
 
                       {canAct && (
                         <div className="flex gap-2">
                           {t.status.code === 'diproses' && t.items.every((i) => !i.qty || i.started_at) && (
-                            <Button size="sm" variant="accent" loading={busy} onClick={() => act(t, 'complete')}>
+                            <Button data-testid={`complete-ticket-btn-${t.id}`} size="sm" variant="accent" loading={busy} onClick={() => act(t, 'complete')}>
                               Selesaikan
                             </Button>
                           )}

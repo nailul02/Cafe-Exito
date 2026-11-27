@@ -11,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class Order extends Model
 {
     protected $fillable = [
-        'public_token', 'order_number', 'client_request_id', 'table_id',
+        'public_token', 'order_number', 'client_request_id', 'table_id', 'table_session_id',
         'service_type', 'order_source', 'customer_name',
         'status', 'ordered_at', 'paid_at',
         'completed_at', 'cancelled_at', 'cancel_reason', 'cancelled_by', 'created_by', 'total',
@@ -32,6 +32,11 @@ class Order extends Model
     public function table(): BelongsTo
     {
         return $this->belongsTo(Table::class);
+    }
+
+    public function tableSession(): BelongsTo
+    {
+        return $this->belongsTo(TableSession::class);
     }
 
     public function details(): HasMany

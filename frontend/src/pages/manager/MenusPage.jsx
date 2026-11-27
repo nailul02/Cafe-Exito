@@ -5,13 +5,14 @@ import { useAction } from '../../hooks/useAction'
 import { Card, StatCard } from '../../components/ui/Card'
 import Button from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
-import { Field, Input, Select } from '../../components/ui/Form'
+import { Field, Input, Select, Toggle } from '../../components/ui/Form'
 import FilterTabs from '../../components/ui/FilterTabs'
 import { AsyncView } from '../../components/ui/States'
 import PageHeader from '../../components/ui/PageHeader'
 import DevNote from '../../components/ui/DevNote'
 import { rupiah } from '../../lib/format'
 import { cn } from '../../lib/cn'
+import { useAuth } from '../../context/AuthContext'
 
 const EMPTY = { name: '', sku: '', price: '', category_id: '', cost_price: '' }
 
@@ -56,6 +57,9 @@ function MenuEditor({ menu, categories, onSaved }) {
 
 /** Daftar dan editor menu Manager; status ketersediaan ditampilkan saja. */
 export default function MenusPage() {
+  const { user } = useAuth()
+  const { run } = useAction()
+  const isOwner = (user?.role?.code || user?.role) === 'owner'
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('semua')
   const [selected, setSelected] = useState(undefined)
@@ -85,7 +89,9 @@ export default function MenusPage() {
                     <p className="text-xs text-brand/70">{menu.sku} · {menu.category.name} · {rupiah(menu.price)}</p>
                     {!menu.is_orderable && <Badge tone="bad" className="mt-1">{menu.unavailable_reason}</Badge>}
                   </button>
-                  <Badge tone={menu.is_available ? 'ok' : 'bad'}>{menu.is_available ? 'Tersedia' : 'Habis'}</Badge>
+                  {isOwner
+                    ? <Toggle checked={menu.is_available} label={`${menu.is_available ? 'Tandai habis' : 'Tandai tersedia'}: ${menu.name}`} onChange={async (available) => { const result = await run(() => menusApi.setAvailability(menu.id, available), available ? 'Menu tersedia' : 'Menu ditandai habis'); if (result) menus.reload() }} />
+                    : <Badge tone={menu.is_available ? 'ok' : 'bad'}>{menu.is_available ? 'Tersedia' : 'Habis'}</Badge>}
                 </div>
               </li>
             ))}</ul>}

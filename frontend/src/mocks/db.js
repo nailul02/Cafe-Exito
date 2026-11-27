@@ -28,13 +28,14 @@ function rng(seed) { let s = seed; return () => ((s = (s * 1664525 + 1013904223)
 
 export function buildSeed() {
   const s = {
-    seq: { order: 0, payment: 0, ticket: 0, movement: 0, detail: 0, purchase: 0, receipt: 0, supplier: 3, user: 5, table: 12, ingredient: 12, menu: 13, attendance: 0 },
+    seq: { order: 0, payment: 0, ticket: 0, movement: 0, detail: 0, purchase: 0, receipt: 0, supplier: 3, user: 5, table: 15, ingredient: 12, menu: 13, attendance: 0, tableSession: 0 },
     users: USERS.map((u) => ({ ...u, password: 'password', extra_permissions: [] })),
     categories: CATEGORIES, tables: TABLES.map((t) => ({ ...t })),
     ingredients: [],
     menus: MENUS.map((m) => ({ ...m, station: CATEGORIES.find((c) => c.id === m.category_id).station, cost_price: null })),
     suppliers: [],
     orders: [], payments: [], tickets: [], details: [], movements: [], purchases: [], receipts: [], audit: [],
+    tableSessions: [], tableSessionTokens: [], orderRequests: [],
     attendances: [],
     settings: { cafe_name: 'Cafe Exito', cafe_address: 'Jl. Balai Gadang, Koto Tangah, Padang', qris_image_url: '/coffee.png', receipt_footer: 'Terima kasih atas kunjungan Anda di Cafe Éxito!' },
   }
@@ -47,7 +48,7 @@ export function buildSeed() {
       const t = new Date(); t.setDate(t.getDate() - d); t.setHours(hour, Math.floor(rand() * 59), 0, 0)
       const items = [[1 + Math.floor(rand() * 8), 1 + Math.floor(rand() * 2)]]
       if (rand() > 0.55) items.push([9 + Math.floor(rand() * 4), 1])
-      createOrderIn(s, { table: 1 + Math.floor(rand() * 12), items, method: rand() > 0.35 ? 'qris' : 'tunai', at: t.toISOString(), history: true, cashier: 3 })
+      createOrderIn(s, { table: 1 + Math.floor(rand() * 15), items, method: rand() > 0.35 ? 'qris' : 'tunai', at: t.toISOString(), history: true, cashier: 3 })
     }
   }
   // Pesanan hari ini dengan beragam status.
@@ -106,6 +107,27 @@ export function load() {
     const raw = localStorage.getItem(KEY)
     if (raw) {
       const s = JSON.parse(raw)
+      let tableMigration = false
+      const sessionMigration = !Array.isArray(s.tableSessions) || !Array.isArray(s.tableSessionTokens) || !Array.isArray(s.orderRequests)
+      s.tableSessions ||= []
+      s.tableSessionTokens ||= []
+      s.orderRequests ||= []
+      s.tables ||= []
+      let nextTableId = Math.max(0, ...s.tables.map((table) => Number(table.id) || 0), Number(s.seq?.table) || 0)
+      for (const seededTable of TABLES) {
+        let table = s.tables.find((row) => String(row.table_number) === seededTable.table_number)
+        if (!table) {
+          table = { ...seededTable, id: ++nextTableId }
+          s.tables.push(table)
+          tableMigration = true
+        } else if (table.status !== 'active') {
+          table.status = 'active'
+          tableMigration = true
+        }
+      }
+      s.seq ||= {}
+      s.seq.table = Math.max(nextTableId, Number(s.seq.table) || 0)
+      s.seq.tableSession = Number(s.seq.tableSession) || 0
       const oldAttendance = (s.attendances || []).some((row) => row.type || row.timestamp)
       let legacyRoles = false
       if (oldAttendance) {
@@ -143,7 +165,7 @@ export function load() {
           }
         })
       }
-      if (oldAttendance || legacyRoles) save(s)
+      if (oldAttendance || legacyRoles || tableMigration || sessionMigration) save(s)
       return s
     }
   } catch { /* abaikan */ }
@@ -160,11 +182,11 @@ const pad = (n, l = 3) => String(n).padStart(l, '0')
 const ymd = (iso) => iso.slice(0, 10).replaceAll('-', '')
 
 export function menuIsOrderable(s, m) {
-  if (!m.is_available) return { ok: false, reason: 'Sedang tidak tersedia' }
+  if (!m.is_available) return { ok: false, reason: 'Habis' }
   return { ok: true, reason: null }
 }
 
-export function createOrderIn(s, { table, items, method, at = now(), history = false, cashier = null, service_type = 'dine_in', order_source = 'qr_customer', customer_name = null }) {
+export function createOrderIn(s, { table, items, method, at = now(), history = false, cashier = null, service_type = 'dine_in', order_source = 'qr_customer', customer_name = null, table_session_id = null, client_request_id = null }) {
   let tableId = null
   if (service_type === 'dine_in') {
     const tbl = s.tables.find((t) => String(t.table_number) === String(table) && t.status === 'active')
@@ -198,6 +220,8 @@ export function createOrderIn(s, { table, items, method, at = now(), history = f
     order_number: orderNo,
     display_number: `#${pad(orderId % 1000)}`,
     table_id: tableId,
+    table_session_id,
+    client_request_id,
     service_type,
     order_source,
     customer_name: customer_name || (service_type === 'takeaway' ? 'Pelanggan Takeaway' : null),
