@@ -6,6 +6,7 @@ use App\Http\Middleware\EnsurePermission;
 use App\Http\Middleware\EnsureStationAccess;
 use App\Http\Middleware\ForceJson;
 use App\Http\Middleware\ValidateTableToken;
+use App\Http\Middleware\ValidateTableSession;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -22,6 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => EnsurePermission::class,
             'station' => EnsureStationAccess::class,
             'table.token' => ValidateTableToken::class,
+            'table.session' => ValidateTableSession::class,
         ]);
         // Seluruh respons API berupa JSON, lengkap dengan X-Request-Id.
         $middleware->api(prepend: [ForceJson::class]);

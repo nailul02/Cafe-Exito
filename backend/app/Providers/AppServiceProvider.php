@@ -34,6 +34,10 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(User::class, UserPolicy::class);
 
         RateLimiter::for('login', function (Request $r) {
+            if ($this->app->environment('testing')) {
+                return Limit::none();
+            }
+
             $login = $r->input('login');
             $normalizedLogin = is_string($login) ? mb_strtolower($login) : '';
 

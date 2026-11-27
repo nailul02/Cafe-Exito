@@ -8,6 +8,7 @@ use App\Enums\TicketStatus;
 use App\Exceptions\DomainError;
 use App\Models\Order;
 use App\Models\OrderTicket;
+use App\Models\OrderDetail;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
@@ -23,13 +24,33 @@ class TicketService
 
     public function createForOrder(Order $order, ?User $user = null): void
     {
-        foreach ($order->details()->get()->groupBy(fn ($d) => $d->station->value) as $station => $lines) {
-            if ($order->tickets()->where('station', $station)->exists()) {
-                continue;
+        $this->createForDetails($order, $order->details()->get()->all(), $user);
+    }
+
+    /** Create one additive ticket batch per station for newly submitted detail rows. */
+    public function createForDetails(Order $order, array $details, ?User $user = null): void
+    {
+        foreach (collect($details)->groupBy(fn ($d) => $d->station->value) as $station => $lines) {
+            $attached = DB::table('order_ticket_details')->whereIn('order_detail_id', $lines->pluck('id'))->pluck('order_detail_id')->all();
+            $lines = $lines->reject(fn ($line) => in_array($line->id, $attached, true));
+            if ($lines->isEmpty()) {
+                // Historical tickets predate the detail pivot; never recreate their station ticket.
+                if ($order->tickets()->where('station', $station)->exists()) continue;
+                $lines = collect($details)->where('station', $station)->values();
             }
-            $ticket = $order->tickets()->create(['station' => $station, 'status' => TicketStatus::Antre->value]);
-            $this->log->ticket($order, $ticket, null, TicketStatus::Antre->value, $user);
+            $batch = ((int) $order->tickets()->where('station', $station)->max('batch_number')) + 1;
+            $ticket = $order->tickets()->create(['station' => $station, 'batch_number' => $batch, 'status' => TicketStatus::Antre->value]);
+            $ticket->details()->attach($lines->pluck('id')->all());
+            $this->log->ticket($order, $ticket, null, TicketStatus::Antre->value, $user, "Batch produksi $batch");
         }
+    }
+
+    private function ticketDetails(OrderTicket $ticket)
+    {
+        $details = $ticket->details()->with('cancellations')->get();
+        return $details->isNotEmpty()
+            ? $details
+            : $ticket->order->details()->where('station', $ticket->station->value)->with('cancellations')->get();
     }
 
     public function start(OrderTicket $ticket, User $user): OrderTicket
@@ -43,8 +64,8 @@ class TicketService
             }
 
             $ticket->update(['status' => TicketStatus::Diproses->value, 'started_at' => now(), 'handled_by' => $user->id]);
-            $order->details()->where('station',$ticket->station->value)->whereNull('started_at')->update(['started_at'=>now()]);
-            if($order->status===OrderStatus::Dibayar){$order->update(['status'=>OrderStatus::Diproses->value]);$this->log->order($order,OrderStatus::Dibayar->value,OrderStatus::Diproses->value,$user,'Produksi dimulai');}
+            foreach ($this->ticketDetails($ticket)->whereNull('started_at') as $detail) $detail->update(['started_at' => now()]);
+            if(in_array($order->status,[OrderStatus::Dibayar,OrderStatus::MenungguPembayaran],true)){$before=$order->status->value;$order->update(['status'=>OrderStatus::Diproses->value]);$this->log->order($order,$before,OrderStatus::Diproses->value,$user,'Produksi dimulai');}
             $this->log->ticket($order, $ticket, TicketStatus::Antre->value, TicketStatus::Diproses->value, $user);
             return $ticket;
         });
@@ -56,11 +77,13 @@ class TicketService
             $orderId=OrderTicket::whereKey($ticket->id)->value('order_id');
             $order=Order::whereKey($orderId)->lockForUpdate()->firstOrFail();
             $ticket=OrderTicket::whereKey($ticket->id)->lockForUpdate()->firstOrFail();
-            $detail=$order->details()->whereKey($detailId)->lockForUpdate()->with('cancellations')->firstOrFail();
+            $detail=$this->ticketDetails($ticket)->where('id',$detailId)->first();
+            if (! $detail) throw new DomainError('TICKET_ITEM_NOT_FOUND','Item tidak termasuk dalam batch tiket ini.',404);
+            $detail=OrderDetail::query()->whereKey($detailId)->lockForUpdate()->with('cancellations')->firstOrFail();
             if($detail->station->value!==$ticket->station->value||$detail->started_at||$detail->qty<=(int)$detail->cancellations->sum('qty'))throw DomainError::invalidTransition('Item','belum dapat diproses','diproses');
             $detail->update(['started_at'=>now()]);
             if($ticket->status===TicketStatus::Antre){$from=$ticket->status->value;$ticket->update(['status'=>TicketStatus::Diproses->value,'started_at'=>now(),'handled_by'=>$user->id]);$this->log->ticket($order,$ticket,$from,TicketStatus::Diproses->value,$user);}
-            if($order->status===OrderStatus::Dibayar){$order->update(['status'=>OrderStatus::Diproses->value]);$this->log->order($order,OrderStatus::Dibayar->value,OrderStatus::Diproses->value,$user,'Produksi item dimulai');}
+            if(in_array($order->status,[OrderStatus::Dibayar,OrderStatus::MenungguPembayaran],true)){$before=$order->status->value;$order->update(['status'=>OrderStatus::Diproses->value]);$this->log->order($order,$before,OrderStatus::Diproses->value,$user,'Produksi item dimulai');}
             return $ticket->fresh();
         });
     }
@@ -74,10 +97,10 @@ class TicketService
             if (! $ticket->status->canTransitionTo(TicketStatus::Selesai)) {
                 throw DomainError::invalidTransition('Tiket', $ticket->status->value, TicketStatus::Selesai->value);
             }
-            $unfinished=$order->details()->where('station',$ticket->station->value)->whereNull('started_at')->get()->filter(fn($d)=>$d->qty>(int)$d->cancellations()->sum('qty'));
+            $unfinished=$this->ticketDetails($ticket)->whereNull('started_at')->filter(fn($d)=>$d->qty>(int)$d->cancellations()->sum('qty'));
             if($unfinished->isNotEmpty())throw DomainError::invalidTransition('Tiket','masih ada item antre','selesai');
             $ticket->update(['status' => TicketStatus::Selesai->value, 'ready_at' => now(), 'handled_by' => $ticket->handled_by ?? $user->id]);
-            $order->details()->where('station',$ticket->station->value)->whereNotNull('started_at')->whereNull('ready_at')->update(['ready_at'=>now()]);
+            foreach ($this->ticketDetails($ticket)->whereNotNull('started_at')->whereNull('ready_at') as $detail) $detail->update(['ready_at' => now()]);
             $this->log->ticket($order, $ticket, TicketStatus::Diproses->value, TicketStatus::Selesai->value, $user);
 
             return $ticket;
@@ -104,7 +127,7 @@ class TicketService
             ->when($updatedSince, fn (Builder $q) => $q->where('order_tickets.updated_at', '>', $updatedSince))
             ->orderBy('orders.ordered_at')
             ->orderBy('order_tickets.id')
-            ->with(['order.table', 'order.details', 'handler']);
+            ->with(['order.table', 'order.details.cancellations', 'details.cancellations', 'handler']);
     }
 
 }

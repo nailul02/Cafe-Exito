@@ -6,6 +6,7 @@ import PageHeader from '../../components/ui/PageHeader'
 import BarChart from '../../components/charts/BarChart'
 import DevNote from '../../components/ui/DevNote'
 import { rupiah } from '../../lib/format'
+import MenuAvailabilityPanel from '../../components/menus/MenuAvailabilityPanel'
 
 /** OW-01: ringkasan penjualan tanpa biaya atau stok yang tidak lagi dikelola aplikasi. */
 export default function OwnerDashboardPage() {
@@ -13,10 +14,11 @@ export default function OwnerDashboardPage() {
   return (
     <>
       <PageHeader title="Dashboard" subtitle="Ringkasan operasional Cafe Exito hari ini." />
+      <MenuAvailabilityPanel title="Ketersediaan Seluruh Menu" />
       <DevNote>Layar Figma Owner memuat laba bersih, kehadiran karyawan, dan pilihan outlet. Itu belum masuk MVP (menunggu keputusan K-B1/K-B3/K-B7).</DevNote>
       <AsyncView res={res} empty={() => false}>
         {(d) => (
-          <div className="space-y-5">
+          <div data-testid="owner-dashboard-container" className="space-y-5">
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <StatCard label="Penjualan hari ini" value={rupiah(d.today.revenue)} hint={d.today.vs_yesterday_percent == null ? 'Belum ada pembanding kemarin' : `${d.today.vs_yesterday_percent >= 0 ? '▲' : '▼'} ${Math.abs(d.today.vs_yesterday_percent)}% dibanding kemarin`} tone={d.today.vs_yesterday_percent < 0 ? 'bad' : 'ok'} />
               <StatCard label="Transaksi" value={d.today.orders} hint="Pesanan terbayar" />

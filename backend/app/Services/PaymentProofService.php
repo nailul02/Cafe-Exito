@@ -20,8 +20,8 @@ class PaymentProofService
 
     public function upload(Order $order, UploadedFile $file): PaymentProof
     {
-        if ($order->order_source !== 'qr_customer' || $order->status->value !== 'menunggu_pembayaran') {
-            throw ValidationException::withMessages(['proof' => 'Bukti hanya dapat diunggah untuk pesanan QR Self-Order yang menunggu pembayaran.']);
+        if ($order->order_source !== 'qr_customer' || in_array($order->status->value, ['selesai', 'dibatalkan'], true)) {
+            throw ValidationException::withMessages(['proof' => 'Pesanan ini tidak lagi menerima bukti pembayaran.']);
         }
         $mime = (new \finfo(FILEINFO_MIME_TYPE))->file($file->getRealPath());
         $image = @getimagesize($file->getRealPath());
@@ -40,7 +40,7 @@ class PaymentProofService
         try {
             return DB::transaction(function () use ($order, $file, $mime, $hash, &$storedPath) {
                 $order = Order::query()->whereKey($order->id)->lockForUpdate()->firstOrFail();
-                if ($order->order_source !== 'qr_customer' || $order->status->value !== 'menunggu_pembayaran') {
+                if ($order->order_source !== 'qr_customer' || in_array($order->status->value, ['selesai', 'dibatalkan'], true)) {
                     throw ValidationException::withMessages(['proof' => 'Pesanan tidak lagi menerima bukti pembayaran.']);
                 }
                 $payment = $order->payments()->where('status', PaymentStatus::Pending->value)->lockForUpdate()->first();
@@ -50,6 +50,9 @@ class PaymentProofService
                         throw ValidationException::withMessages(['proof' => 'Pembayaran tidak tersedia untuk upload bukti.']);
                     }
                     $payment = $order->payments()->create(['method' => PaymentMethod::Qris->value, 'status' => PaymentStatus::Pending->value, 'amount' => $last->amount]);
+                    $allocations = DB::table('payment_order_details')->where('payment_id', $last->id)
+                        ->pluck('amount', 'order_detail_id')->map(fn ($amount) => (int) $amount)->all();
+                    PaymentAllocationService::attach($payment, $allocations);
                 }
                 if ($payment->method !== PaymentMethod::Qris) {
                     throw ValidationException::withMessages(['proof' => 'Upload bukti hanya tersedia untuk pembayaran QRIS QR Self-Order.']);

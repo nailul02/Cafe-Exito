@@ -12,9 +12,9 @@ class CreatePosOrderRequest extends ApiRequest
         return [
             'client_request_id' => ['required', 'uuid'],
             'service_type' => ['required', Rule::in(['dine_in', 'takeaway'])],
-            'table_number' => [
-                'nullable', 'string', 'max:10',
-                Rule::exists('tables', 'table_number')->where('status', 'active'),
+            'table_id' => [
+                'nullable', 'required_if:service_type,dine_in', 'prohibited_if:service_type,takeaway', 'integer',
+                Rule::exists('tables', 'id')->where('status', 'active')->whereIn('table_number', array_map('strval', range(1, 15))),
             ],
             'customer_name' => ['nullable', 'string', 'max:100'],
             'payment_method' => ['required', Rule::in(['tunai', 'qris'])],

@@ -1,5 +1,8 @@
+import { useMemo } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
+import { customerApi } from '../../api'
 import { useCart } from '../../context/CartContext'
+import { useResource } from '../../hooks/useResource'
 import Button from '../../components/ui/Button'
 import { Stepper } from './CatalogPage'
 import { rupiah } from '../../lib/format'
@@ -8,6 +11,9 @@ import { rupiah } from '../../lib/format'
 export default function CartPage() {
   const cart = useCart()
   const navigate = useNavigate()
+  const cartKey = useMemo(() => JSON.stringify(cart.lines.map(({ menu, qty }) => ({ menu_id: menu.id, qty }))), [cart.lines])
+  const validation = useResource(() => customerApi.validateCart(JSON.parse(cartKey)), [cartKey], { enabled: cart.lines.length > 0, poll: true, interval: 10000 })
+  const issues = validation.data?.issues || []
   if (!cart.table) return <Navigate to="/order/table" replace />
   return (
     <>
@@ -23,7 +29,7 @@ export default function CartPage() {
             <ul className="space-y-5">
               {cart.lines.map(({ menu, qty }) => (
                 <li key={menu.id} className="flex items-start justify-between gap-3">
-                  <div><p className="text-lg font-medium">{menu.name}</p><p className="text-sm font-medium text-[#797474]">{qty} x {rupiah(menu.price)}</p></div>
+                  <div><p className="text-lg font-medium">{menu.name}</p><p className="text-sm font-medium text-[#797474]">{qty} x {rupiah(menu.price)}</p>{issues.filter((issue) => issue.menu_id === menu.id).map((issue) => <p role="alert" key={issue.menu_id} className="text-sm font-semibold text-bad">{issue.message}. Hapus item ini atau pilih menu lain.</p>)}</div>
                   <div className="text-right"><p className="text-lg">{rupiah(qty * menu.price)}</p><div className="mt-2 flex justify-end"><Stepper value={qty} onChange={(q) => cart.setQty(menu, q)} /></div></div>
                 </li>
               ))}
@@ -32,7 +38,7 @@ export default function CartPage() {
           </>
         )}
       </div>
-      {cart.lines.length > 0 && <div className="fixed inset-x-0 bottom-0 mx-auto max-w-md p-4"><Button size="lg" block onClick={() => navigate('/order/payment')}>Pilih Metode Pembayaran</Button></div>}
+      {cart.lines.length > 0 && <div className="fixed inset-x-0 bottom-0 mx-auto max-w-md p-4"><Button data-testid="proceed-to-payment-btn" size="lg" block disabled={validation.loading || issues.length > 0} onClick={() => navigate('/order/payment')}>{issues.length ? 'Periksa menu yang habis' : 'Pilih Metode Pembayaran'}</Button></div>}
     </>
   )
 }

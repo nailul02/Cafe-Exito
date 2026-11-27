@@ -18,6 +18,7 @@ enum Permission: string
     case QueueViewAll = 'queue.view_all';
     case MenusView = 'menus.view';
     case MenusManage = 'menus.manage';
+    case MenusAvailability = 'menus.availability';
     case IngredientsView = 'ingredients.view';
     case IngredientsManage = 'ingredients.manage';
     case RecipesManage = 'recipes.manage';

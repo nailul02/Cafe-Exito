@@ -18,7 +18,7 @@ class RefundWorkflowTest extends ApiTestCase
         $order=Order::where('public_token',$token)->firstOrFail();$detail=$order->details()->firstOrFail();
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
         $this->postJson(self::API."/customer/orders/$token/cancel",['detail_id'=>$detail->id,'qty'=>1,'reason'=>'Pelanggan batal'])->assertOk();
-        $refund=RefundRequest::firstOrFail();
+        $refund=RefundRequest::query()->whereIn('payment_id', $order->payments()->select('id'))->latest('id')->firstOrFail();
         $this->actingAsRole(UserRole::Manager);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertForbidden();
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertOk()->assertJsonPath('data.status','approved');
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'cash','confirm_cash'=>true])->assertOk()->assertJsonPath('data.status','completed');
@@ -32,7 +32,7 @@ class RefundWorkflowTest extends ApiTestCase
         $this->table();$menu=$this->menuWithRecipe('Latte',['Beans'=>[1000,1]],false,20000);
         $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$o=Order::where('public_token',$token)->firstOrFail();
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$o->payment->id.'/verify')->assertOk();
-        $this->postJson(self::API."/customer/orders/$token/cancel",['detail_id'=>$o->details->first()->id,'qty'=>1,'reason'=>'Batal'])->assertOk();$refund=RefundRequest::firstOrFail();
+        $this->postJson(self::API."/customer/orders/$token/cancel",['detail_id'=>$o->details->first()->id,'qty'=>1,'reason'=>'Batal'])->assertOk();$refund=RefundRequest::query()->whereIn('payment_id', $o->payments()->select('id'))->latest('id')->firstOrFail();
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertOk();
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer'])->assertUnprocessable();
     }
@@ -42,7 +42,7 @@ class RefundWorkflowTest extends ApiTestCase
         $this->table();$menu=$this->menuWithRecipe('Latte',['Beans'=>[1000,1]],false,20000);
         $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$order=Order::where('public_token',$token)->firstOrFail();
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
-        $this->postJson(self::API."/customer/orders/$token/cancel",['detail_id'=>$order->details->first()->id,'qty'=>1,'reason'=>'Batal'])->assertOk();$refund=RefundRequest::firstOrFail();
+        $this->postJson(self::API."/customer/orders/$token/cancel",['detail_id'=>$order->details->first()->id,'qty'=>1,'reason'=>'Batal'])->assertOk();$refund=RefundRequest::query()->whereIn('payment_id', $order->payments()->select('id'))->latest('id')->firstOrFail();
         User::factory()->create(['role'=>UserRole::Manager,'is_active'=>true]);
         $owner=$this->actingAsRole(UserRole::Owner);$order->update(['created_by'=>$owner->id]);
         $this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertOk()->assertJsonPath('data.status','conflict_of_interest');
@@ -52,7 +52,7 @@ class RefundWorkflowTest extends ApiTestCase
     public function test_cashier_can_withdraw_only_a_manual_request_they_created(): void
     {
         $this->table();$menu=$this->menuWithRecipe('Latte',['Beans'=>[1000,1]],false,20000);
-        $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$order=Order::firstOrFail();
+        $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$order=Order::where('public_token',$token)->firstOrFail();
         $cashier=$this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
         $id=$this->postJson(self::API.'/refunds',['payment_id'=>$order->payment->id,'amount'=>10000,'reason'=>'Penyesuaian transaksi'])->assertCreated()->json('data.id');
         $this->postJson(self::API."/refunds/$id/withdraw",['reason'=>'Pengajuan tidak diperlukan'])->assertOk()->assertJsonPath('data.status','withdrawn');
@@ -67,7 +67,7 @@ class RefundWorkflowTest extends ApiTestCase
         $this->postJson(self::API."/customer/orders/$token/cancel",['detail_id'=>$order->details->first()->id,'qty'=>1,'reason'=>'Pelanggan batal'])->assertOk();
         $this->actingAs($cashier)->postJson(self::API.'/refunds',['payment_id'=>$order->payment->id,'amount'=>5000,'reason'=>'Manual'])->assertStatus(409)
             ->assertJsonPath('error.code','REFUND_REQUEST_ALREADY_PENDING')->assertJsonPath('message','Payment ini sudah memiliki refund request yang menunggu keputusan Owner.');
-        $this->assertDatabaseCount('refund_requests',1);
+        $this->assertSame(1, RefundRequest::query()->whereIn('payment_id', $order->payments()->select('id'))->count());
     }
 
     public function test_owner_can_cancel_a_partial_item_and_create_an_owner_attributed_refund(): void
@@ -83,7 +83,7 @@ class RefundWorkflowTest extends ApiTestCase
     public function test_partial_refund_keeps_payment_verified_and_cumulative_refund_cannot_exceed_payment(): void
     {
         $this->table();$menu=$this->menuWithRecipe('Latte',['Beans'=>[1000,1]],false,20000);
-        $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$order=Order::firstOrFail();
+        $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$order=Order::where('public_token',$token)->firstOrFail();
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
         $first=$this->postJson(self::API.'/refunds',['payment_id'=>$order->payment->id,'amount'=>10000,'reason'=>'Refund parsial'])->assertCreated()->json('data.id');
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/$first/decision",['decision'=>'approved'])->assertOk();
@@ -102,13 +102,18 @@ class RefundWorkflowTest extends ApiTestCase
         $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>2]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$order=Order::where('public_token',$token)->firstOrFail();$detail=$order->details->first();
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
         $payload=['detail_id'=>$detail->id,'qty'=>1,'reason'=>'Pelanggan batal'];
-        $this->postJson(self::API."/customer/orders/$token/cancel",$payload,['Idempotency-Key'=>'cancel-unit-1'])->assertOk();$first=RefundRequest::firstOrFail();
+        $this->postJson(self::API."/customer/orders/$token/cancel",$payload,['Idempotency-Key'=>'cancel-unit-1'])->assertOk();$first=RefundRequest::query()->whereIn('payment_id', $order->payments()->select('id'))->latest('id')->firstOrFail();
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$first->id}/decision",['decision'=>'approved'])->assertOk();
         $this->postJson(self::API."/refunds/{$first->id}/revoke",['reason'=>'Perlu pemeriksaan'])->assertOk()->assertJsonPath('data.status','approval_revoked');
         $this->postJson(self::API."/customer/orders/$token/cancel",$payload,['Idempotency-Key'=>'cancel-unit-1'])->assertOk();
-        $this->assertDatabaseCount('order_item_cancellations',1);$this->assertDatabaseCount('refund_request_items',1);
+        $this->assertSame(1, \App\Models\OrderItemCancellation::query()->where('order_detail_id', $detail->id)->count());
+        $this->assertSame(1, \App\Models\RefundRequestItem::query()->where('cancellation_id', \App\Models\OrderItemCancellation::query()->where('order_detail_id', $detail->id)->value('id'))->count());
         $this->postJson(self::API."/customer/orders/$token/cancel",$payload,['Idempotency-Key'=>'cancel-unit-2'])->assertOk();
-        $this->assertDatabaseCount('order_item_cancellations',2);$this->assertDatabaseCount('refund_request_items',2);$this->assertDatabaseCount('refund_requests',2);
+        $cancellationIds = \App\Models\OrderItemCancellation::query()->where('order_detail_id', $detail->id)->pluck('id');
+        $refundIds = RefundRequest::query()->whereIn('payment_id', $order->payments()->select('id'))->pluck('id');
+        $this->assertCount(2, $cancellationIds);
+        $this->assertSame(2, \App\Models\RefundRequestItem::query()->whereIn('cancellation_id', $cancellationIds)->count());
+        $this->assertSame(2, $refundIds->count());
     }
 
     public function test_manager_records_conflict_note_owner_verifies_and_manager_cannot_verify_or_decide(): void
@@ -156,14 +161,16 @@ class RefundWorkflowTest extends ApiTestCase
         $refund->forceFill(['created_at'=>now()->subHours(25)])->save();
         $this->artisan('refunds:notify-deadlines')->assertExitCode(0);
         $this->artisan('refunds:notify-deadlines')->assertExitCode(0);
-        $this->assertSame(1,\App\Models\AppNotification::where('user_id',$cashier->id)->where('type','refund.decision_overdue')->count());
+        $this->assertSame(1,\App\Models\AppNotification::where('user_id',$cashier->id)->where('type','refund.decision_overdue')->whereJsonContains('data', ['refund_request_id' => $refund->id])->count());
         $this->assertNotNull($refund->fresh()->decision_late_notified_at);
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertOk();
         $refund->update(['decided_at'=>now()->subHours(49)]);
         $this->artisan('refunds:notify-deadlines')->assertExitCode(0);
         $this->artisan('refunds:notify-deadlines')->assertExitCode(0);
-        $this->assertSame(1,\App\Models\AppNotification::where('user_id',$cashier->id)->where('type','refund.execution_overdue')->count());
-        $this->assertSame(1,\App\Models\AppNotification::where('type','refund.execution_overdue')->where('user_id','<>',$cashier->id)->count());
+        $expectedRecipients = User::query()->where('is_active', true)->whereIn('role', ['owner', 'kasir'])->orderBy('id')->pluck('id')->all();
+        $actualRecipients = \App\Models\AppNotification::query()->where('type', 'refund.execution_overdue')
+            ->whereJsonContains('data', ['refund_request_id' => $refund->id])->orderBy('user_id')->pluck('user_id')->all();
+        $this->assertSame($expectedRecipients, $actualRecipients);
         $this->assertNotNull($refund->fresh()->execution_late_notified_at);
     }
 
@@ -171,7 +178,7 @@ class RefundWorkflowTest extends ApiTestCase
     private function makeVerifiedManualRefund(): array
     {
         $this->table();$menu=$this->menuWithRecipe('Latte',['Beans'=>[1000,1]],false,20000);
-        $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$order=Order::firstOrFail();
+        $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');$this->uploadPaymentProof($token);$order=Order::where('public_token',$token)->firstOrFail();
         $cashier=$this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
         $id=$this->postJson(self::API.'/refunds',['payment_id'=>$order->payment->id,'amount'=>10000,'reason'=>'Refund manual test'])->assertCreated()->json('data.id');
         return [RefundRequest::findOrFail($id),$cashier];

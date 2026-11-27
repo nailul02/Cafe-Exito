@@ -20,7 +20,7 @@ class QrisPaymentProofTest extends ApiTestCase
     private function qrisOrder(): array
     {
         $menu = $this->menuWithRecipe('QR Test', ['Teh test' => [10, 1]], false, 5000);
-        $response = $this->postJson(self::API.'/customer/orders', ['payment_method' => 'qris', 'items' => [['menu_id' => $menu->id, 'qty' => 1]]])->assertCreated();
+        $response = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]], 'qris', '1', [], false)->assertCreated();
         return [Order::query()->where('public_token', $response->json('data.public_token'))->firstOrFail(), $response->json('data.public_token')];
     }
 
@@ -46,7 +46,7 @@ class QrisPaymentProofTest extends ApiTestCase
     {
         [$order, $token] = $this->qrisOrder();
         $this->post(self::API.'/customer/orders/'.$token.'/payment-proof', ['proof' => $this->png()])->assertCreated()->assertJsonPath('data.status', 'pending')->assertJsonMissingPath('data.path');
-        $proof = PaymentProof::firstOrFail();
+        $proof = $order->payment->proofs()->latest('id')->firstOrFail();
         $freshOrder = $order->fresh();
         $this->assertSame('pending', $freshOrder->payment->status->value);
         $this->assertSame('pending', $proof->status);
@@ -64,7 +64,15 @@ class QrisPaymentProofTest extends ApiTestCase
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk()->assertJsonPath('data.status.code', 'dibayar');
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertStatus(409);
         $this->assertSame(1, $order->tickets()->count());
-        $this->assertSame(['payment_proof.uploaded', 'payment_proof.verified', 'payment.verified'], AuditLog::query()->orderBy('id')->pluck('action')->all());
+        $paymentId = $order->payment->id;
+        $actions = AuditLog::query()->where(function ($query) use ($proof, $paymentId) {
+            $query->where(function ($proofQuery) use ($proof) {
+                $proofQuery->where('subject_type', 'payment_proof')->where('subject_id', $proof->id);
+            })->orWhere(function ($paymentQuery) use ($paymentId) {
+                $paymentQuery->where('subject_type', 'payment')->where('subject_id', $paymentId);
+            });
+        })->orderBy('id')->pluck('action')->all();
+        $this->assertSame(['payment_proof.uploaded', 'payment_proof.verified', 'payment.verified'], $actions);
     }
 
     public function test_upload_rejects_invalid_mime_oversize_and_identical_file(): void
@@ -95,11 +103,43 @@ class QrisPaymentProofTest extends ApiTestCase
         $second = $this->png('two.png');
         file_put_contents($second->getRealPath(), "different-content\n", FILE_APPEND);
         $this->post(self::API.'/customer/orders/'.$token.'/payment-proof', ['proof' => $second])->assertCreated();
-        $this->assertSame(2, PaymentProof::count());
-        $this->assertSame('rejected', PaymentProof::orderBy('id')->first()->status);
-        $this->assertSame('pending', PaymentProof::orderByDesc('id')->first()->status);
+        $proofs = PaymentProof::query()->whereIn('payment_id', $order->payments()->select('id'))->orderBy('id')->get();
+        $this->assertCount(2, $proofs);
+        $this->assertSame('rejected', $proofs->first()->status);
+        $this->assertSame('pending', $proofs->last()->status);
         $this->assertSame(1, $order->payments()->where('status', 'pending')->count());
         $this->assertSame(1, $order->payments()->where('status', 'rejected')->count());
+    }
+
+    public function test_partial_qris_installment_uses_a_new_proof_and_releases_production_once_fully_paid(): void
+    {
+        $menu = $this->menuWithRecipe('QR cicilan', ['Teh cicilan' => [100, 1]], false, 20000);
+        $token = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 2]], 'qris', '1', [], false)->assertCreated()->json('data.public_token');
+        $firstProofFile = $this->png('first-installment.png');
+        $this->post(self::API.'/customer/orders/'.$token.'/payment-proof', ['proof' => $firstProofFile])->assertCreated();
+        $order = Order::query()->where('public_token', $token)->firstOrFail();
+        $first = $order->payments()->oldest('id')->firstOrFail();
+        $firstProof = $first->proofs()->where('status', 'pending')->firstOrFail();
+
+        $this->actingAsRole(UserRole::Kasir);
+        $this->postJson(self::API.'/cashier/payments/'.$first->id.'/verify', ['amount_applied' => 20000])->assertOk();
+        $this->assertSame('verified', $first->fresh()->status->value);
+        $this->assertSame('verified', $firstProof->fresh()->status);
+        $this->assertSame(20000, (int) $first->orderDetails()->sum('payment_order_details.amount'));
+        $this->assertSame(0, $order->tickets()->count(), 'A partial QRIS payment must not release production.');
+
+        $remainder = $order->payments()->where('status', 'pending')->firstOrFail();
+        $this->post(self::API.'/customer/orders/'.$token.'/payment-proof', ['proof' => $firstProofFile])->assertUnprocessable();
+        $remainderProof = $this->png('remainder.png');
+        file_put_contents($remainderProof->getRealPath(), "second installment\n", FILE_APPEND);
+        $this->post(self::API.'/customer/orders/'.$token.'/payment-proof', ['proof' => $remainderProof])->assertCreated();
+        $this->postJson(self::API.'/cashier/payments/'.$remainder->id.'/verify')->assertOk();
+
+        $this->assertSame('dibayar', $order->fresh()->status->value);
+        $this->assertSame(1, $order->tickets()->count());
+        $this->assertSame(2, $order->payments()->where('status', 'verified')->count());
+        $this->postJson(self::API.'/cashier/payments/'.$first->id.'/verify')->assertStatus(409);
+        $this->assertSame(1, $order->tickets()->count(), 'A verified installment retry must not duplicate production tickets.');
     }
 
     public function test_tokens_are_required_proof_access_is_protected_and_other_order_token_isolated(): void

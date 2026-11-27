@@ -27,9 +27,9 @@ class CorsAndReportTest extends ApiTestCase
     {
         $this->table('1');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [10000, 18]], false, 20000);
-        $this->placeOrder([['menu_id' => $menu->id, 'qty' => 2]], 'qris')->assertCreated();
+        $paidResponse = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 2]], 'qris')->assertCreated();
         $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]], 'tunai')->assertCreated(); // tetap menunggu bayar
-        $paid = Order::query()->orderBy('id')->firstOrFail();
+        $paid = Order::query()->where('public_token', $paidResponse->json('data.public_token'))->firstOrFail();
         $this->actingAsRole(UserRole::Kasir);
         $this->postJson(self::API.'/cashier/payments/'.$paid->payment->id.'/verify')->assertOk();
 

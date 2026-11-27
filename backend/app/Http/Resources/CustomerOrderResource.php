@@ -14,6 +14,7 @@ class CustomerOrderResource extends OrderResource
         if ($data['payment']) {
             $data['payment'] = array_intersect_key($data['payment'], array_flip(['method', 'status', 'amount', 'proof']));
         }
+        $data['payments'] = array_map(fn ($payment) => array_intersect_key($payment, array_flip(['method', 'status', 'amount', 'proof', 'paid_at'])), $data['payments'] ?? []);
         $data['tickets'] = array_map(fn ($t) => ['station' => $t['station'], 'status' => $t['status']], $data['tickets']);
 
         return $data;

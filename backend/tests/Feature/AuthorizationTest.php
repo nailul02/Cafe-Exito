@@ -77,7 +77,8 @@ class AuthorizationTest extends ApiTestCase
 
     public function test_pelanggan_tidak_bisa_mengakses_pesanan_lain_dengan_id_berurut(): void
     {
-        $this->getJson(self::API.'/customer/orders/1')->assertStatus(404);
-        $this->assertSame(0, Order::count());
+        $ordersBefore = Order::count();
+        $this->getJson(self::API.'/customer/orders/1')->assertUnauthorized();
+        $this->assertSame($ordersBefore, Order::count());
     }
 }

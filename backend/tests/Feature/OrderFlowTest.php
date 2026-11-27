@@ -6,6 +6,7 @@ use App\Enums\UserRole;
 use App\Models\Ingredient;
 use App\Models\Order;
 use App\Models\StockMovement;
+use App\Models\Table;
 
 /** Alur inti: pesan → verifikasi kasir → tiket stasiun → produksi → selesai. */
 class OrderFlowTest extends ApiTestCase
@@ -22,7 +23,7 @@ class OrderFlowTest extends ApiTestCase
         $token = $resp->json('data.public_token');
         $this->assertNull($resp->json('data.id'), 'pelanggan tidak menerima ID internal');
 
-        $order = Order::query()->firstOrFail();
+        $order = Order::query()->where('public_token', $token)->firstOrFail();
         $this->assertSame(0, $order->tickets()->count(), 'tiket baru dibuat setelah pembayaran terverifikasi');
 
         $this->actingAsRole(UserRole::Kasir);
@@ -67,8 +68,8 @@ class OrderFlowTest extends ApiTestCase
     {
         $this->table('1');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [100, 18]]);
-        $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]])->assertCreated();
-        $order = Order::firstOrFail();
+        $response = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]])->assertCreated();
+        $order = Order::where('public_token', $response->json('data.public_token'))->firstOrFail();
         Ingredient::where('name', 'Kopi')->update(['stock' => 5]); // habis sebelum diproses
         $this->actingAsRole(UserRole::Kasir);
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
@@ -94,8 +95,8 @@ class OrderFlowTest extends ApiTestCase
     {
         $this->table('1');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [1000, 18]], false, 20000);
-        $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]])->assertCreated();
-        $paymentId = Order::firstOrFail()->payment->id;
+        $response = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]])->assertCreated();
+        $paymentId = Order::where('public_token', $response->json('data.public_token'))->firstOrFail()->payment->id;
         $this->actingAsRole(UserRole::Kasir);
         $this->postJson(self::API."/cashier/payments/$paymentId/verify", ['amount_received' => 5000])->assertStatus(422)->assertJsonPath('error.code', 'AMOUNT_TOO_LOW');
         $this->postJson(self::API."/cashier/payments/$paymentId/verify", ['amount_received' => 50000])->assertOk()->assertJsonPath('data.payment.change', 30000);
@@ -124,30 +125,34 @@ class OrderFlowTest extends ApiTestCase
 
     public function test_client_request_id_mencegah_pesanan_ganda(): void
     {
-        $this->table('1');
+        $table = $this->table('1');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [1000, 18]]);
+        $opened = $this->postJson(self::API.'/customer/sessions/open', ['qr_token' => $table->qr_token, 'customer_name' => 'Pelanggan'])->assertOk();
+        $this->withHeader('X-Table-Session', $opened->json('data.session_token'));
         $body = ['table_number' => '1', 'payment_method' => 'tunai', 'items' => [['menu_id' => $menu->id, 'qty' => 1]], 'client_request_id' => '7b0e6e5a-2d0f-4b86-9f64-0d1f5a6c9a11'];
         $a = $this->postJson(self::API.'/customer/orders', $body)->assertCreated()->json('data.public_token');
         $b = $this->postJson(self::API.'/customer/orders', $body)->assertCreated()->json('data.public_token');
         $this->assertSame($a, $b);
-        $this->assertSame(1, Order::count());
+        $this->assertSame(1, Order::query()->where('public_token', $a)->count());
     }
 
     public function test_nomor_meja_tidak_sesuai_token_qr_ditolak(): void
     {
         $t1 = $this->table('1');
-        $this->table('2');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [1000, 18]]);
-        $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]], 'tunai', '2', ['X-Table-Token' => $t1->qr_token])->assertStatus(422)->assertJsonPath('error.code', 'TABLE_INVALID');
-        $this->placeOrder([['menu_id' => $menu->id, 'qty' => 1]], 'tunai', '1', ['X-Table-Token' => $t1->qr_token])->assertCreated();
+        $opened = $this->postJson(self::API.'/customer/sessions/open', ['qr_token' => $t1->qr_token, 'customer_name' => 'Pelanggan'])->assertOk();
+        $this->withHeader('X-Table-Session', $opened->json('data.session_token'));
+        $body = ['payment_method' => 'tunai', 'items' => [['menu_id' => $menu->id, 'qty' => 1]]];
+        $this->postJson(self::API.'/customer/orders', [...$body, 'table_number' => '2'])->assertStatus(422)->assertJsonPath('error.code', 'TABLE_INVALID');
+        $this->postJson(self::API.'/customer/orders', [...$body, 'table_number' => '1'])->assertCreated();
     }
 
     public function test_pembatalan_owner_membuat_request_refund_tanpa_mengubah_payment(): void
     {
         $this->table('1');
         $menu = $this->menuWithRecipe('Latte', ['Kopi' => [1000, 18]]);
-        $this->placeOrder([['menu_id' => $menu->id, 'qty' => 2]])->assertCreated();
-        $order = Order::firstOrFail();
+        $response = $this->placeOrder([['menu_id' => $menu->id, 'qty' => 2]])->assertCreated();
+        $order = Order::where('public_token', $response->json('data.public_token'))->firstOrFail();
         $this->actingAsRole(UserRole::Kasir);
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
         $this->actingAsRole(UserRole::Owner);

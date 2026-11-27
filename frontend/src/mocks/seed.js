@@ -1,10 +1,10 @@
 ﻿// Data contoh realistis untuk mode mock. Bukan data Cafe Exito yang sebenarnya.
 // Semua kata sandi akun mock: "password".
 export const PERMISSION_DEFAULTS = {
-  owner: ['dashboard.owner', 'orders.view', 'orders.cancel', 'transactions.view', 'queue.view_all', 'menus.view', 'reports.view', 'attendance.view_all', 'users.manage', 'permissions.grant', 'refund.review', 'refund.audit', 'refund.conflict.document', 'notifications.view'],
+  owner: ['dashboard.owner', 'orders.view', 'orders.cancel', 'transactions.view', 'queue.view_all', 'menus.view', 'menus.manage', 'menus.availability', 'reports.view', 'attendance.view_all', 'users.manage', 'permissions.grant', 'refund.review', 'refund.audit', 'refund.conflict.document', 'notifications.view'],
   manager: ['dashboard.manager', 'orders.view', 'transactions.view', 'queue.view_all', 'menus.view', 'menus.manage', 'tables.manage', 'reports.view', 'audit.view', 'attendance.view_all', 'attendance.record', 'refund.conflict.document', 'notifications.view'],
   kasir: ['dashboard.cashier', 'payments.verify', 'transactions.view', 'menus.view', 'orders.create_pos', 'attendance.record', 'refund.view', 'refund.execute', 'refund.request', 'notifications.view'],
-  barista_kitchen: ['dashboard.station', 'queue.barista', 'queue.kitchen', 'attendance.record', 'notifications.view'],
+  barista_kitchen: ['dashboard.station', 'queue.barista', 'queue.kitchen', 'menus.view', 'menus.availability', 'attendance.record', 'notifications.view'],
 }
 export const GRANTABLE = ['queue.barista', 'queue.kitchen', 'menus.view', 'attendance.record']
 
@@ -40,6 +40,6 @@ export const MENUS = [
   { id: 13, sku: 'FOD-002', name: 'Mie Goreng', price: 28000, category_id: 5, is_available: true, image: false },
 ]
 
-export const TABLES = Array.from({ length: 12 }, (_, i) => ({
+export const TABLES = Array.from({ length: 15 }, (_, i) => ({
   id: i + 1, table_number: String(i + 1), qr_token: `demo-table-${String(i + 1).padStart(2, '0')}`, status: 'active',
 }))

@@ -29,10 +29,18 @@ class OrderResource extends JsonResource
                 'id' => $d->id, 'menu_id' => $d->menu_id, 'name' => $d->menu_name, 'qty' => $d->qty,
                 'qty_cancelled' => (int) $d->cancellations->sum('qty'), 'qty_remaining' => max(0,$d->qty-(int)$d->cancellations->sum('qty')),
                 'started_at' => $d->started_at?->toIso8601String(), 'ready_at' => $d->ready_at?->toIso8601String(),
-                'cancellations' => $d->cancellations->map(fn($c)=>['qty'=>$c->qty,'reason'=>$c->reason,'source'=>$c->source,'cancelled_at'=>$c->created_at?->toIso8601String(),'refund_status'=>$c->refundItem?->refundRequest?->status])->values()->all(),
+                'cancellations' => $d->cancellations->map(function ($c) {
+                    $statuses = $c->refundItems->map(fn ($item) => $item->refundRequest?->status)->filter()->unique()->values();
+                    return [
+                        'qty' => $c->qty, 'reason' => $c->reason, 'source' => $c->source,
+                        'cancelled_at' => $c->created_at?->toIso8601String(),
+                        'refund_status' => $statuses->count() > 1 ? 'mixed' : $statuses->first(),
+                    ];
+                })->values()->all(),
                 'unit_price' => $d->unit_price, 'subtotal' => $d->subtotal, 'station' => $d->station->value,
             ])->values()->all(),
             'payment' => $this->payment ? PaymentResource::make($this->payment)->resolve($request) : null,
+            'payments' => $this->whenLoaded('payments', fn () => $this->payments->sortBy('id')->map(fn ($payment) => PaymentResource::make($payment)->resolve($request))->values()->all()),
             'tickets' => $this->tickets->map(fn ($t) => [
                 'id' => $t->id, 'station' => $t->station->value, 'status' => Rp::enum($t->status),
                 'started_at' => $t->started_at?->toIso8601String(), 'ready_at' => $t->ready_at?->toIso8601String(),

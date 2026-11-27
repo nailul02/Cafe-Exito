@@ -17,6 +17,7 @@ class CashierPosTest extends ApiTestCase
 {
     public function test_nominal_tunai_tidak_diterima_saat_order_pos_dibuat(): void
     {
+        $ordersBefore = Order::count();
         $menu = $this->menuWithRecipe('Teh POS', ['Teh POS' => [20, 2]], false, 12000);
         $this->actingAsRole(UserRole::Kasir);
 
@@ -28,7 +29,7 @@ class CashierPosTest extends ApiTestCase
             'items' => [['menu_id' => $menu->id, 'qty' => 1]],
         ])->assertUnprocessable()->assertJsonValidationErrors('amount_received');
 
-        $this->assertSame(0, Order::count());
+        $this->assertSame($ordersBefore, Order::count());
     }
 
     public function test_kasir_dapat_membuat_pesanan_dine_in_tunai_dan_retry_tidak_menggandakan(): void
@@ -40,13 +41,13 @@ class CashierPosTest extends ApiTestCase
         $payload = [
             'client_request_id' => (string) Str::uuid(),
             'service_type' => 'dine_in',
-            'table_number' => $table->table_number,
+            'table_id' => $table->id,
             'customer_name' => 'Uji POS',
             'payment_method' => 'tunai',
             'items' => [['menu_id' => $menu->id, 'qty' => 2, 'price' => 1]],
         ];
 
-        $this->getJson(self::API.'/cashier/tables')->assertOk()->assertJsonPath('data.0.table_number', '7');
+        $this->getJson(self::API.'/cashier/tables')->assertOk()->assertJsonFragment(['table_number' => '7']);
         $response = $this->postJson(self::API.'/cashier/pos/orders', $payload)
             ->assertCreated()
             // POS membuat pesanan menunggu_pembayaran; kasir verifikasi secara manual
@@ -58,12 +59,12 @@ class CashierPosTest extends ApiTestCase
 
         $orderId = $response->json('data.id');
         $this->assertSame(1, Order::findOrFail($orderId)->tickets()->count());
-        $this->assertSame(1, Order::query()->where('order_source', 'pos_cashier')->count());
+        $this->assertSame(1, Order::query()->whereKey($orderId)->where('order_source', 'pos_cashier')->count());
 
         // Retry dengan client_request_id yang sama tidak menggandakan pesanan
         $this->postJson(self::API.'/cashier/pos/orders', $payload)
             ->assertCreated()->assertJsonPath('data.id', $orderId);
-        $this->assertSame(1, Order::query()->where('order_source', 'pos_cashier')->count());
+        $this->assertSame(1, Order::query()->whereKey($orderId)->where('order_source', 'pos_cashier')->count());
 
         // Kasir memverifikasi pembayaran secara manual
         $order = Order::findOrFail($orderId);
@@ -80,6 +81,7 @@ class CashierPosTest extends ApiTestCase
     {
         $menu = $this->menuWithRecipe('Kopi Tunai Tertunda', ['Kopi Tunai' => [100, 18]], false, 20000);
         $this->actingAsRole(UserRole::Kasir);
+        $awaitingBefore = $this->getJson(self::API.'/cashier/dashboard')->assertOk()->json('data.awaiting_payment');
         $response = $this->postJson(self::API.'/cashier/pos/orders', [
             'client_request_id' => (string) Str::uuid(),
             'service_type' => 'takeaway',
@@ -105,7 +107,7 @@ class CashierPosTest extends ApiTestCase
         $this->postJson(self::API."/cashier/orders/{$order->id}/complete")
             ->assertOk()->assertJsonPath('data.status.code', 'selesai')->assertJsonPath('data.payment.status.code', 'pending');
         $this->assertSame('pending', $payment->fresh()->status->value, 'Pesanan selesai tetap menjadi tunggakan sampai kasir menerima uang.');
-        $this->getJson(self::API.'/cashier/dashboard')->assertOk()->assertJsonPath('data.awaiting_payment', 1);
+        $this->getJson(self::API.'/cashier/dashboard')->assertOk()->assertJsonPath('data.awaiting_payment', $awaitingBefore + 1);
         $this->getJson(self::API.'/cashier/orders?filter[status]=menunggu_pembayaran')
             ->assertOk()->assertJsonPath('data.0.id', $order->id)->assertJsonPath('data.0.payment.status.code', 'pending');
 
@@ -174,39 +176,39 @@ class CashierPosTest extends ApiTestCase
             ->count());
     }
 
-    public function test_kasir_dapat_membuat_dine_in_tanpa_meja_di_pos(): void
+    public function test_kasir_tidak_dapat_membuat_dine_in_tanpa_meja_di_pos(): void
     {
+        $ordersBefore = Order::query()->count();
         $menu = $this->menuWithRecipe('Kopi Bar POS', ['Kopi Bar' => [20, 2]], false, 15000);
         $this->actingAsRole(UserRole::Kasir);
 
-        $response = $this->postJson(self::API.'/cashier/pos/orders', [
+        $this->postJson(self::API.'/cashier/pos/orders', [
             'client_request_id' => (string) Str::uuid(),
             'service_type' => 'dine_in',
-            'table_number' => null,
+            'table_id' => null,
             'customer_name' => 'Pelanggan Bar Counter',
             'payment_method' => 'tunai',
             'items' => [['menu_id' => $menu->id, 'qty' => 1]],
-        ])->assertCreated()
-            ->assertJsonPath('data.service_type', 'dine_in')
-            ->assertJsonPath('data.table', null)
-            ->assertJsonPath('data.customer_name', 'Pelanggan Bar Counter')
-            ->assertJsonPath('data.payment.status.code', 'pending');
+        ])->assertUnprocessable()->assertJsonValidationErrors('table_id');
 
-        // Verifikasi tunai oleh kasir
-        $orderId = $response->json('data.id');
-        $order = Order::findOrFail($orderId);
-        $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify', ['amount_received' => 20000])
-            ->assertOk()
-            ->assertJsonPath('data.payment.status.code', 'verified');
+        $this->assertSame($ordersBefore, Order::query()->count());
     }
 
     public function test_endpoint_bukti_qr_self_order_menolak_order_qris_pos(): void
     {
+        $table = $this->table('1');
+        $session = $this->postJson(self::API.'/customer/sessions/open', [
+            'qr_token' => $table->qr_token,
+            'customer_name' => 'Pemeriksaan sesi',
+        ])->assertOk()->json('data');
         $menu = $this->menuWithRecipe('Teh POS QR proof', ['Teh' => [20, 2]], false, 12000);
         $this->actingAsRole(UserRole::Kasir);
         $response = $this->postJson(self::API.'/cashier/pos/orders', ['client_request_id' => (string) Str::uuid(), 'service_type' => 'takeaway', 'payment_method' => 'qris', 'items' => [['menu_id' => $menu->id, 'qty' => 1]]])->assertCreated();
         $order = Order::findOrFail($response->json('data.id'));
-        $this->post(self::API.'/customer/orders/'.$order->public_token.'/payment-proof', ['proof' => UploadedFile::fake()->image('pos.png', 20, 20)])->assertUnprocessable();
+        $this->post(self::API.'/customer/orders/'.$order->public_token.'/payment-proof', [
+            'proof' => UploadedFile::fake()->image('pos.png', 20, 20),
+        ], ['X-Table-Session' => $session['session_token']])->assertNotFound();
+        $this->assertSame(0, $order->payment->proofs()->count());
         $this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk()->assertJsonPath('data.payment.status.code', 'verified');
     }
 

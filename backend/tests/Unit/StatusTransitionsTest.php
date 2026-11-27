@@ -20,7 +20,7 @@ class StatusTransitionsTest extends TestCase
 
     public function test_pesanan_tidak_boleh_lompat_atau_mundur(): void
     {
-        $this->assertFalse(OrderStatus::MenungguPembayaran->canTransitionTo(OrderStatus::Diproses));
+        $this->assertTrue(OrderStatus::MenungguPembayaran->canTransitionTo(OrderStatus::Diproses), 'pesanan tunai dapat diproses sebelum pembayaran lunas');
         $this->assertTrue(OrderStatus::MenungguPembayaran->canTransitionTo(OrderStatus::Selesai), 'tunai dapat selesai sebelum dilunasi setelah seluruh stasiun siap');
         $this->assertFalse(OrderStatus::Diproses->canTransitionTo(OrderStatus::Dibayar));
     }

@@ -32,6 +32,7 @@ export const NAV = {
   admin: managerNav, // backward-compatibility
   owner: [
     { to: '/owner', label: 'Dashboard', end: true },
+    { to: '/owner/menus', label: 'Kelola Menu' },
     { to: '/owner/production', label: 'Monitoring Produksi' },
     { to: '/owner/orders/cancellations', label: 'Pembatalan Item' },
     { to: '/owner/refunds', label: 'Persetujuan Refund' },

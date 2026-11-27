@@ -45,4 +45,14 @@ class Payment extends Model
     {
         return $this->hasOne(PaymentProof::class)->latestOfMany();
     }
+
+    public function refunds(): HasMany
+    {
+        return $this->hasMany(RefundRequest::class);
+    }
+
+    public function orderDetails()
+    {
+        return $this->belongsToMany(OrderDetail::class, 'payment_order_details')->withPivot('amount')->withTimestamps();
+    }
 }

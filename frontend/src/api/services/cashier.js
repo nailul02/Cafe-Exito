@@ -9,5 +9,7 @@ export const cashierApi = {
   receipt: (orderId) => get(`/cashier/transactions/${orderId}/receipt`),
   createPosOrder: (payload) => post('/cashier/pos/orders', payload),
   tables: () => get('/cashier/tables'),
+  sessions: () => get('/cashier/sessions'),
+  closeSession: (id) => post(`/cashier/sessions/${id}/close`),
   paymentProof: (paymentId) => http.get(`/cashier/payments/${paymentId}/proof`, { responseType: 'blob' }).then((r) => r.data),
 }

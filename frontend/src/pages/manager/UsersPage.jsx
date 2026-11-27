@@ -6,6 +6,7 @@ import Button from '../../components/ui/Button'
 import DataTable from '../../components/ui/DataTable'
 import { AsyncView } from '../../components/ui/States'
 import PageHeader from '../../components/ui/PageHeader'
+import TableQrCode from '../../components/tables/TableQrCode'
 
 export default function UsersPage() {
   const tables = useResource(() => usersApi.tables(), [])
@@ -13,7 +14,7 @@ export default function UsersPage() {
   const columns = [
     { key: 'number', header: 'Meja', render: (table) => <span className="font-medium">Meja {table.table_number}</span> },
     { key: 'status', header: 'Status', render: (table) => table.status?.label || table.status?.code || table.status },
-    { key: 'url', header: 'Tautan QR', render: (table) => <code className="break-all text-xs">{table.qr_url}</code> },
+    { key: 'qr', header: 'QR Code unik', render: (table) => <TableQrCode table={table} /> },
     { key: 'actions', header: 'Tindakan', render: (table) => <Button size="sm" variant="outline" onClick={async () => { await run(() => usersApi.regenerateQr(table.id), 'QR dibuat ulang; QR lama tidak berlaku'); tables.reload() }}>Buat ulang QR</Button> },
   ]
   const addTable = async () => {

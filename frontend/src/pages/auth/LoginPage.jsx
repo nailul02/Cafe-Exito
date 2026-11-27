@@ -1,4 +1,3 @@
-
 import { useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
@@ -23,9 +22,9 @@ export default function LoginPage() {
   const location = useLocation()
 
   const [form, setForm] = useState({ login: '', password: '' })
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
 
   const roleCode = user?.role?.code || user?.role
   const homeDest = getHomeByRole(roleCode, user?.station)
@@ -72,14 +71,14 @@ export default function LoginPage() {
 
         <form
           onSubmit={submit}
+          data-testid="login-form"
           className="mt-6 space-y-4 rounded-xl border border-black/15 p-6"
         >
           <Field label="Email atau username" error={error?.errors?.login}>
             <Input
+              data-testid="login-input"
               value={form.login}
-              onChange={(e) =>
-                setForm({ ...form, login: e.target.value })
-              }
+              onChange={(e) => setForm({ ...form, login: e.target.value })}
               placeholder="nama@cafeexito.com"
               autoComplete="username"
               required
@@ -89,11 +88,10 @@ export default function LoginPage() {
           <Field label="Password" error={error?.errors?.password}>
             <div className="relative">
               <Input
+                data-testid="login-password"
                 type={showPassword ? 'text' : 'password'}
                 value={form.password}
-                onChange={(e) =>
-                  setForm({ ...form, password: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
                 placeholder="••••••••"
                 autoComplete="current-password"
                 required
@@ -102,15 +100,17 @@ export default function LoginPage() {
 
               <button
                 type="button"
+                data-testid="toggle-password-visibility"
                 onClick={() => setShowPassword((prev) => !prev)}
                 className="absolute inset-y-0 right-0 flex items-center justify-center px-3 text-gray-500 hover:text-brand-ink focus:outline-none"
-                aria-label={showPassword ? 'Sembunyikan password' : 'Tampilkan password'}
-                title={showPassword ? 'Sembunyikan password' : 'Tampilkan password'}
+                aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                title={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                aria-pressed={showPassword}
               >
                 {showPassword ? (
-                  <EyeOff size={20} />
+                  <EyeOff aria-hidden="true" size={20} />
                 ) : (
-                  <Eye size={20} />
+                  <Eye aria-hidden="true" size={20} />
                 )}
               </button>
             </div>
@@ -122,7 +122,12 @@ export default function LoginPage() {
             </p>
           )}
 
-          <Button type="submit" loading={busy} block>
+          <Button
+            data-testid="login-submit"
+            type="submit"
+            loading={busy}
+            block
+          >
             Login
           </Button>
         </form>
@@ -138,9 +143,7 @@ export default function LoginPage() {
                 <button
                   key={u}
                   type="button"
-                  onClick={() =>
-                    setForm({ login: u, password: 'password' })
-                  }
+                  onClick={() => setForm({ login: u, password: 'password' })}
                   className="rounded-full bg-white px-3 py-1 font-medium text-brand-ink ring-1 ring-black/10"
                 >
                   {l}

@@ -12,6 +12,7 @@ import PageHeader from '../../components/ui/PageHeader'
 import DevNote from '../../components/ui/DevNote'
 import { rupiah } from '../../lib/format'
 import { cn } from '../../lib/cn'
+import { useAuth } from '../../context/AuthContext'
 
 const EMPTY = { name: '', sku: '', price: '', category_id: '', cost_price: '' }
 
@@ -54,33 +55,33 @@ function MenuEditor({ menu, categories, onSaved }) {
   )
 }
 
-/** Daftar menu dan ketersediaan manual. Modul stok dan resep tidak digunakan untuk operasional. */
+/** Daftar dan editor menu Manager; status ketersediaan ditampilkan saja. */
 export default function MenusPage() {
+  const { user } = useAuth()
+  const { run } = useAction()
+  const isOwner = (user?.role?.code || user?.role) === 'owner'
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('semua')
   const [selected, setSelected] = useState(undefined)
   const menus = useResource(() => menusApi.list({ search }), [search])
   const cats = useResource(() => menusApi.categories(), [])
-  const { run } = useAction()
   const all = menus.data || []
-  const rows = all.filter((menu) => filter === 'semua' || (filter === 'tersedia' ? menu.is_orderable : !menu.is_orderable))
-  const toggle = async (menu) => { await run(() => menusApi.setAvailability(menu.id, !menu.is_available)); menus.refresh() }
-
+  const rows = all.filter((menu) => filter === 'semua' || (filter === 'tersedia' ? menu.is_available : !menu.is_available))
   return (
     <>
-      <PageHeader title="Kelola Data & Ketersediaan Menu" subtitle="Atur nama, kategori, harga jual, dan ketersediaan menu." actions={<Button variant="accent" onClick={() => setSelected(null)}>+ Tambah menu baru</Button>} />
+      <PageHeader title="Kelola Data Menu" subtitle="Atur nama, kategori, dan harga jual menu." actions={<Button variant="accent" onClick={() => setSelected(null)}>+ Tambah menu baru</Button>} />
       <DevNote>Foto menu, pajak PB1, opsi tambahan, dan promo belum termasuk alur operasional yang disetujui.</DevNote>
       <div className="mb-5 grid gap-3 sm:grid-cols-2">
-        <StatCard label="Menu aktif" value={all.filter((menu) => menu.is_available).length} />
-        <StatCard label="Menu nonaktif" value={all.filter((menu) => !menu.is_available).length} tone="bad" />
+        <StatCard label="Menu tersedia" value={all.filter((menu) => menu.is_available).length} />
+        <StatCard label="Menu habis" value={all.filter((menu) => !menu.is_available).length} tone="bad" />
       </div>
       <div className="grid gap-5 xl:grid-cols-5">
         <div className="space-y-3 xl:col-span-2">
           <Input placeholder="Cari nama atau SKU…" value={search} onChange={(event) => setSearch(event.target.value)} aria-label="Cari menu" />
-          <FilterTabs variant="solid" options={[{ value: 'semua', label: 'Semua' }, { value: 'tersedia', label: 'Tersedia' }, { value: 'habis', label: 'Tidak tersedia' }]} value={filter} onChange={setFilter} />
+          <FilterTabs variant="solid" options={[{ value: 'semua', label: 'Semua' }, { value: 'tersedia', label: 'Tersedia' }, { value: 'habis', label: 'Habis' }]} value={filter} onChange={setFilter} />
           <AsyncView res={menus} emptyTitle="Menu tidak ditemukan">
             {() => <ul className="space-y-2">{rows.map((menu) => (
-              <li key={menu.id}>
+              <li key={menu.id} data-testid={`menu-row-${menu.id}`}>
                 <div className={cn('flex items-center gap-3 rounded-2xl border bg-white p-3', selected?.id === menu.id ? 'border-accent ring-2 ring-accent/30' : 'border-black/5')}>
                   {menu.image_url ? <img src={menu.image_url} alt="" className="h-12 w-12 rounded-xl object-cover" /> : <div className="grid h-12 w-12 place-items-center rounded-xl bg-cream text-[10px] text-brand/50" aria-hidden>Exito</div>}
                   <button className="min-w-0 flex-1 text-left" onClick={() => setSelected(menu)}>
@@ -88,7 +89,9 @@ export default function MenusPage() {
                     <p className="text-xs text-brand/70">{menu.sku} · {menu.category.name} · {rupiah(menu.price)}</p>
                     {!menu.is_orderable && <Badge tone="bad" className="mt-1">{menu.unavailable_reason}</Badge>}
                   </button>
-                  <Toggle checked={menu.is_available} onChange={() => toggle(menu)} label={`Ketersediaan manual ${menu.name}`} />
+                  {isOwner
+                    ? <Toggle checked={menu.is_available} label={`${menu.is_available ? 'Tandai habis' : 'Tandai tersedia'}: ${menu.name}`} onChange={async (available) => { const result = await run(() => menusApi.setAvailability(menu.id, available), available ? 'Menu tersedia' : 'Menu ditandai habis'); if (result) menus.reload() }} />
+                    : <Badge tone={menu.is_available ? 'ok' : 'bad'}>{menu.is_available ? 'Tersedia' : 'Habis'}</Badge>}
                 </div>
               </li>
             ))}</ul>}

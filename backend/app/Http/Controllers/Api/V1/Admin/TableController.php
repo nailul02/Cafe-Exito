@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\SaveTableRequest;
 use App\Http\Resources\TableResource;
+use App\Exceptions\DomainError;
 use App\Models\Table;
 use App\Services\AuditService;
 use App\Support\ApiResponse;
@@ -16,7 +17,7 @@ class TableController extends Controller
 {
     public function index()
     {
-        return ApiResponse::success(TableResource::collection(Table::query()->orderByRaw('LENGTH(table_number), table_number')->get()));
+        return ApiResponse::success(TableResource::collection(Table::query()->numbered()->orderByRaw('CAST(table_number AS INTEGER)')->get()));
     }
 
     public function store(SaveTableRequest $request)
@@ -28,7 +29,11 @@ class TableController extends Controller
 
     public function update(SaveTableRequest $request, Table $table)
     {
-        $table->update($request->validated());
+        $data = $request->validated();
+        if (isset($data['table_number']) && (string) $data['table_number'] !== (string) $table->table_number) {
+            throw DomainError::tableInvalid('Nomor meja adalah identitas tetap dan tidak dapat diubah.');
+        }
+        $table->update($data);
 
         return ApiResponse::success(TableResource::make($table), 'Meja diperbarui');
     }
@@ -36,9 +41,7 @@ class TableController extends Controller
     /** Menonaktifkan (bukan menghapus) agar riwayat pesanan tetap utuh. */
     public function destroy(Table $table)
     {
-        $table->update(['status' => 'inactive']);
-
-        return ApiResponse::success(TableResource::make($table), 'Meja dinonaktifkan');
+        throw DomainError::tableInvalid('Meja 1–15 merupakan meja tetap Cafe Éxito dan tidak dapat dinonaktifkan.');
     }
 
     /** Token baru; QR lama otomatis tidak berlaku. */

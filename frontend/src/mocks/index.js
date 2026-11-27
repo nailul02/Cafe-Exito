@@ -44,6 +44,18 @@ const orderOut = (s, o) => {
     tickets: s.tickets.filter((t) => t.order_id === o.id).map((t) => ({ id: t.id, station: t.station, status: label(t.status, LABELS.ticket), started_at: t.started_at, ready_at: t.ready_at })),
   }
 }
+const sessionOut = (s, session) => {
+  const table = s.tables.find((row) => row.id === session.table_id)
+  const orders = s.orders.filter((order) => order.table_session_id === session.id).sort((a, b) => a.id - b.id).map((order) => {
+    const output = orderOut(s, order)
+    const payments = s.payments.filter((payment) => payment.order_id === order.id)
+    const paid = payments.filter((payment) => ['verified', 'refunded'].includes(payment.status)).reduce((sum, payment) => sum + payment.amount, 0)
+    return { public_token: order.public_token, order_number: order.order_number, display_number: order.display_number, status: order.status, total: order.total, paid, balance: Math.max(0, order.total - paid), items: output.items, payments: payments.map((payment) => ({ method: payment.method, status: payment.status, amount: payment.amount, proof_status: payment.proof?.status || null, paid_at: payment.paid_at })) }
+  })
+  const total = orders.reduce((sum, order) => sum + order.total, 0)
+  const paid = orders.reduce((sum, order) => sum + order.paid, 0)
+  return { table: { number: table?.table_number }, customer_name: session.customer_name, status: session.status, opened_at: session.opened_at, closed_at: session.closed_at, total, paid, balance: Math.max(0, total - paid), orders }
+}
 
 export const ordersApi = {
   async list() { await wait(); need(currentUser(),'orders.view'); const s=load(); return s.orders.slice().sort((a,b)=>b.id-a.id).map(o=>orderOut(s,o)) },
@@ -87,26 +99,48 @@ export const authApi = {
 
 // ---------- Pelanggan ----------
 export const customerApi = {
-  async table(qrToken) { await wait(); const t = load().tables.find((x) => x.qr_token === qrToken && x.status === 'active'); if (!t) throw new ApiError({ status: 404, code: 'TABLE_INVALID', message: 'QR meja tidak dikenali.' }); return { id: t.id, number: t.table_number } },
+  async table(identifier) { await wait(); const t = load().tables.find((x) => x.qr_token === identifier && x.status === 'active' && /^(?:[1-9]|1[0-5])$/.test(String(x.table_number))); if (!t) throw new ApiError({ status: 422, code: 'TABLE_INVALID', message: 'QR meja tidak dikenali atau tidak tersedia.' }); return { number: t.table_number } },
+  async openSession(qrToken, customerName) {
+    await wait(); const s = load()
+    const table = s.tables.find((row) => row.qr_token === qrToken && row.status === 'active' && /^(?:[1-9]|1[0-5])$/.test(String(row.table_number)))
+    if (!table) throw new ApiError({ status: 422, code: 'TABLE_INVALID', message: 'QR meja tidak dikenali atau tidak tersedia.' })
+    let session = s.tableSessions.find((row) => row.table_id === table.id && row.status === 'active')
+    if (!session && !String(customerName || '').trim()) return { requires_name: true, table: { number: table.table_number }, session: null, session_token: null }
+    if (!session) {
+      s.seq.tableSession = (s.seq.tableSession || 0) + 1
+      session = { id: s.seq.tableSession, table_id: table.id, customer_name: String(customerName).trim(), status: 'active', opened_at: new Date().toISOString(), closed_at: null }
+      s.tableSessions.push(session)
+    }
+    const token = `mock-session-${session.id}-${Math.random().toString(36).slice(2)}`
+    s.tableSessionTokens.push({ session_id: session.id, token, revoked: false })
+    save(s); tokenStorage.setTableSession(token)
+    return { requires_name: false, table: { number: table.table_number }, session: sessionOut(s, session), session_token: token }
+  },
+  async currentSession() { await wait(40); const s = load(); const token = tokenStorage.getTableSession(); const credential = s.tableSessionTokens.find((row) => row.token === token && !row.revoked); const session = s.tableSessions.find((row) => row.id === credential?.session_id && row.status === 'active'); if (!session) throw new ApiError({ status: 401, code: 'TABLE_SESSION_INVALID', message: 'Sesi meja tidak aktif. Silakan scan ulang QR meja.' }); return sessionOut(s, session) },
   async menus() {
     await wait(); const s = load()
-    return s.menus.map((m) => { const c = s.categories.find((x) => x.id === m.category_id); const o = menuIsOrderable(s, m); return { id: m.id, name: m.name, price: m.price, category: { id: c.id, name: c.name }, display_group: c.display_group, image_url: m.image ? '/coffee.png' : null, is_orderable: o.ok, unavailable_reason: o.reason } })
+    return s.menus.map((m) => { const c = s.categories.find((x) => x.id === m.category_id); const o = menuIsOrderable(s, m); return { id: m.id, name: m.name, price: m.price, category: { id: c.id, name: c.name }, display_group: c.display_group, image_url: m.image ? '/coffee.png' : null, is_available: m.is_available, is_orderable: o.ok, unavailable_reason: o.reason } })
   },
   async validateCart(items) {
     await wait(80); const s = load(); const issues = []; let total = 0
     const lines = items.map(({ menu_id, qty }) => { const m = s.menus.find((x) => x.id === menu_id); const o = m ? menuIsOrderable(s, m) : { ok: false, reason: 'Menu tidak ditemukan' }; if (!o.ok) issues.push({ menu_id, code: 'MENU_UNAVAILABLE', message: `${m?.name ?? 'Menu'} ${o.reason.toLowerCase()}` }); const subtotal = (m?.price ?? 0) * qty; total += subtotal; return { menu_id, name: m?.name, qty, unit_price: m?.price ?? 0, subtotal } })
     return { items: lines, total, issues }
   },
-  async createOrder({ table_number, payment_method, items, table_token }) {
+  async createOrder({ payment_method, items, client_request_id }) {
     await wait(); const s = load()
-    if (table_token) { const t = s.tables.find((x) => x.qr_token === table_token); if (!t || String(t.table_number) !== String(table_number)) throw new ApiError({ status: 422, code: 'TABLE_INVALID', message: 'Nomor meja tidak sesuai dengan QR.' }) }
+    const token = tokenStorage.getTableSession(); const credential = s.tableSessionTokens.find((row) => row.token === token && !row.revoked); const session = s.tableSessions.find((row) => row.id === credential?.session_id && row.status === 'active')
+    if (!session) throw new ApiError({ status: 401, code: 'TABLE_SESSION_INVALID', message: 'Scan ulang QR meja untuk melanjutkan sesi.' })
+    const signature = JSON.stringify({ items: items.slice().sort((a, b) => a.menu_id - b.menu_id), payment_method })
+    const prior = s.orderRequests.find((row) => row.session_id === session.id && row.id === client_request_id)
+    if (prior) { if (prior.signature !== signature) throw new ApiError({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED', message: 'ID checkout sudah digunakan untuk isi keranjang berbeda.' }); const old = s.orders.find((row) => row.id === prior.order_id); return orderOut(s, old) }
     for (const { menu_id } of items) { const m = s.menus.find((x) => x.id === menu_id); const o = m && menuIsOrderable(s, m); if (!o?.ok) throw new ApiError({ status: 409, code: 'MENU_UNAVAILABLE', message: `${m?.name ?? 'Menu'} sedang tidak tersedia.` }) }
-    const { order } = createOrderIn(s, { table: table_number, items: items.map((i) => [i.menu_id, i.qty]), method: payment_method })
+    const { order } = createOrderIn(s, { table: s.tables.find((row) => row.id === session.table_id).table_number, items: items.map((i) => [i.menu_id, i.qty]), method: payment_method, customer_name: session.customer_name, table_session_id: session.id, client_request_id })
+    if (client_request_id) s.orderRequests.push({ session_id: session.id, id: client_request_id, order_id: order.id, signature })
     save(s); return orderOut(s, order)
   },
-  async order(publicToken) { await wait(60); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); if (!o) throw notFound('Pesanan'); return orderOut(s, o) },
+  async order(publicToken) { await wait(60); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); if (!o) throw notFound('Pesanan'); const token = tokenStorage.getTableSession(); const credential = s.tableSessionTokens.find((row) => row.token === token && !row.revoked); if (!credential || credential.session_id !== o.table_session_id) throw new ApiError({ status: 404, code: 'NOT_FOUND', message: 'Pesanan tidak ditemukan.' }); return orderOut(s, o) },
   async cancelOrder(publicToken, payload = {}) {
-    await wait(); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); if (!o) throw notFound('Pesanan')
+    await wait(); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); const credential = s.tableSessionTokens.find((row) => row.token === tokenStorage.getTableSession() && !row.revoked); if (!o || credential?.session_id !== o.table_session_id) throw notFound('Pesanan')
     const d = s.details.find((x) => x.id === Number(payload.detail_id) && x.order_id === o.id); if (!d) throw notFound('Item pesanan')
     if (!String(payload.reason || '').trim()) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Alasan pembatalan wajib diisi.' })
     const qty = Number(payload.qty); const remaining = d.qty - (d.qty_cancelled || 0)
@@ -120,7 +154,7 @@ export const customerApi = {
     save(s); return orderOut(s, o)
   },
   async uploadPaymentProof(publicToken, file) {
-    await wait(); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); if (!o) throw notFound('Pesanan')
+    await wait(); const s = load(); const o = s.orders.find((x) => x.public_token === publicToken); const credential = s.tableSessionTokens.find((row) => row.token === tokenStorage.getTableSession() && !row.revoked); if (!o || credential?.session_id !== o.table_session_id) throw notFound('Pesanan')
     if (o.order_source !== 'qr_customer' || o.status !== 'menunggu_pembayaran') throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Bukti hanya dapat diunggah untuk QR Self-Order yang menunggu pembayaran.' })
     if (!file || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 3 * 1024 * 1024) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Pilih gambar JPEG, PNG, atau WEBP maksimal 3 MB.' })
     const payments = s.payments.filter((x) => x.order_id === o.id); let p = payments.at(-1)
@@ -168,16 +202,19 @@ export const cashierApi = {
   },
   async createPosOrder(payload) {
     await wait(); const u = currentUser(); need(u, 'orders.create_pos'); const s = load()
-    const { service_type = 'dine_in', table_number, customer_name, payment_method = 'tunai', amount_received, items } = payload
+    const { service_type = 'dine_in', table_id, customer_name, payment_method = 'tunai', amount_received, items } = payload
     if (amount_received != null) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Uang diterima dicatat setelah pesanan dibuat.' })
     if (!items || !items.length) {
       throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Item pesanan tidak boleh kosong.' })
     }
+    const selectedTable = service_type === 'dine_in' ? s.tables.find((t) => t.id === Number(table_id) && t.status === 'active' && Number(t.table_number) >= 1 && Number(t.table_number) <= 15) : null
+    if (service_type === 'dine_in' && !selectedTable) throw new ApiError({ status: 422, code: 'TABLE_INVALID', message: 'Pilih meja aktif dari daftar Meja 1–15.' })
+    if (service_type === 'takeaway' && table_id != null) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Pesanan takeaway tidak boleh memiliki meja.' })
     const { order, payment } = createOrderIn(s, {
-      table: service_type === 'dine_in' ? table_number : null,
+      table: selectedTable?.table_number ?? null,
       service_type,
       order_source: 'pos_cashier',
-      customer_name: customer_name || (service_type === 'takeaway' ? 'Pelanggan Takeaway' : `Meja ${table_number}`),
+      customer_name: customer_name || (service_type === 'takeaway' ? 'Pelanggan Takeaway' : `Meja ${selectedTable.table_number}`),
       items: items.map((i) => [i.menu_id, i.qty]),
       method: payment_method,
       cashier: u.id,
@@ -187,7 +224,17 @@ export const cashierApi = {
   },
   async tables() {
     await wait(40)
-    return load().tables.filter((t) => t.status === 'active')
+    return load().tables.filter((t) => t.status === 'active' && /^(?:[1-9]|1[0-5])$/.test(String(t.table_number))).sort((a, b) => Number(a.table_number) - Number(b.table_number))
+  },
+  async sessions() { await wait(40); need(currentUser(), 'payments.verify'); const s = load(); return s.tableSessions.filter((session) => session.status === 'active').map((session) => ({ id: session.id, ...sessionOut(s, session) })) },
+  async closeSession(id) {
+    await wait(); need(currentUser(), 'payments.verify'); const s = load(); const session = s.tableSessions.find((row) => row.id === Number(id) && row.status === 'active'); if (!session) throw notFound('Sesi meja')
+    const snapshot = sessionOut(s, session)
+    if (snapshot.orders.some((order) => !['selesai', 'dibatalkan'].includes(order.status))) throw new ApiError({ status: 409, code: 'SESSION_ORDERS_INCOMPLETE', message: 'Semua pesanan harus selesai sebelum sesi ditutup.' })
+    if (snapshot.orders.some((order) => order.payments.some((payment) => payment.status === 'pending'))) throw new ApiError({ status: 409, code: 'SESSION_PAYMENTS_PENDING', message: 'Selesaikan verifikasi pembayaran sebelum sesi ditutup.' })
+    if (snapshot.balance > 0) throw new ApiError({ status: 409, code: 'SESSION_BALANCE_DUE', message: 'Sisa tagihan sesi harus lunas.' })
+    session.status = 'closed'; session.closed_at = new Date().toISOString(); for (const credential of s.tableSessionTokens.filter((row) => row.session_id === session.id)) credential.revoked = true
+    save(s); return { id: session.id, ...sessionOut(s, session) }
   },
 }
 
@@ -254,12 +301,12 @@ export const stationApi = {
 
 // ---------- Menu ----------
 export const menusApi = {
-  async list(params = {}) { await wait(); need(currentUser(), 'menus.view'); const s = load(); const q = (params.search || '').toLowerCase(); return s.menus.filter((m) => !q || m.name.toLowerCase().includes(q) || m.sku.toLowerCase().includes(q)).map((m) => menuAdmin(s, m)) },
+  async list(params = {}) { await wait(); const u = currentUser(); need(u, 'menus.view'); const s = load(); const q = (params.search || '').toLowerCase(); return s.menus.filter((m) => { const c=s.categories.find((x)=>x.id===m.category_id); const stationRole=u.role==='barista_kitchen'||u.role==='barista'||u.role==='kitchen'; return (!stationRole||c.station===u.station) && (!q || m.name.toLowerCase().includes(q) || m.sku.toLowerCase().includes(q)) }).map((m) => menuAdmin(s, m)) },
   async show(id) { await wait(60); const s = load(); const m = s.menus.find((x) => x.id === Number(id)); if (!m) throw notFound('Menu'); return menuAdmin(s, m) },
   async create(p) { await wait(); need(currentUser(), 'menus.manage'); const s = load(); const cat = s.categories.find((c) => c.id === Number(p.category_id)); s.seq.menu += 1; const m = { id: s.seq.menu, sku: p.sku || `NEW-${s.seq.menu}`, name: p.name, price: Number(p.price), category_id: cat.id, is_available: true, image: false, station: p.station || cat.station, cost_price: p.cost_price ?? null }; s.menus.push(m); save(s); return menuAdmin(s, m) },
   async update(id, p) { await wait(); need(currentUser(), 'menus.manage'); const s = load(); const m = s.menus.find((x) => x.id === Number(id)); if (!m) throw notFound('Menu'); Object.assign(m, { name: p.name ?? m.name, sku: p.sku ?? m.sku, price: p.price != null ? Number(p.price) : m.price, category_id: p.category_id ? Number(p.category_id) : m.category_id, station: p.station ?? m.station, cost_price: p.cost_price ?? m.cost_price }); save(s); return menuAdmin(s, m) },
   async remove(id) { await wait(); need(currentUser(), 'menus.manage'); const s = load(); s.menus = s.menus.filter((x) => x.id !== Number(id)); save(s); return null },
-  async setAvailability(id, v) { await wait(80); need(currentUser(), 'menus.manage'); const s = load(); const m = s.menus.find((x) => x.id === Number(id)); if (!m) throw notFound('Menu'); m.is_available = !!v; save(s); return menuAdmin(s, m) },
+  async setAvailability(id, v) { await wait(80); const u=currentUser(); need(u, 'menus.availability'); const s = load(); const m = s.menus.find((x) => x.id === Number(id)); if (!m) throw notFound('Menu'); const c=s.categories.find((x)=>x.id===m.category_id); if (u.role!=='owner' && (!['barista_kitchen','barista','kitchen'].includes(u.role)||u.station!==c.station)) throw forbid(); m.is_available = !!v; save(s); return menuAdmin(s, m) },
   async recipe() { throw retiredOperationalFeature('resep') },
   async saveRecipe() { throw retiredOperationalFeature('resep') },
   async categories() { await wait(60); return load().categories },
@@ -324,8 +371,8 @@ export const usersApi = {
   async resetPassword(id, password) { await wait(); need(currentUser(), 'users.manage'); const s = load(); const u = s.users.find((x) => x.id === Number(id)); if (!u || u.role === 'owner') throw forbid(); if (String(password).length < 8) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Kata sandi minimal 8 karakter.' }); u.password = password; save(s); return null },
   async permissions(id) { await wait(60); need(currentUser(), 'permissions.grant'); const s = load(); const u = s.users.find((x) => x.id === Number(id)); return { defaults: PERMISSION_DEFAULTS[u.role], granted: u.extra_permissions, grantable: GRANTABLE } },
   async savePermissions(id, perms) { await wait(); need(currentUser(), 'permissions.grant'); const s = load(); const u = s.users.find((x) => x.id === Number(id)); if (perms.some((p) => !GRANTABLE.includes(p))) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Ada izin yang tidak dapat diberikan.' }); u.extra_permissions = perms; save(s); return publicUser(u) },
-  async tables() { await wait(60); need(currentUser(), 'tables.manage'); return load().tables.map((t) => ({ ...t, qr_url: `${window.location.origin}/order?t=${t.qr_token}` })) },
-  async createTable(p) { await wait(); need(currentUser(), 'tables.manage'); const s = load(); s.seq.table += 1; const t = { id: s.seq.table, table_number: String(p.table_number), qr_token: `demo-table-${Math.random().toString(36).slice(2, 8)}`, status: 'active' }; s.tables.push(t); save(s); return { ...t, qr_url: `${window.location.origin}/order?t=${t.qr_token}` } },
+  async tables() { await wait(60); need(currentUser(), 'tables.manage'); return load().tables.filter((t) => /^(?:[1-9]|1[0-5])$/.test(String(t.table_number))).sort((a, b) => Number(a.table_number) - Number(b.table_number)).map((t) => ({ ...t, qr_url: `${window.location.origin}/order?t=${t.qr_token}` })) },
+  async createTable(p) { await wait(); need(currentUser(), 'tables.manage'); const n = String(p.table_number); const s = load(); if (!/^(?:[1-9]|1[0-5])$/.test(n) || s.tables.some((t) => t.table_number === n)) throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Nomor meja harus unik dan berada pada rentang 1–15.' }); s.seq.table = Math.max(s.seq.table, ...s.tables.map((t) => Number(t.id))); const t = { id: ++s.seq.table, table_number: n, qr_token: `demo-table-${Math.random().toString(36).slice(2, 8)}`, status: 'active' }; s.tables.push(t); save(s); return { ...t, qr_url: `${window.location.origin}/order?t=${t.qr_token}` } },
   async regenerateQr(id) { await wait(); need(currentUser(), 'tables.manage'); const s = load(); const t = s.tables.find((x) => x.id === Number(id)); t.qr_token = `demo-table-${Math.random().toString(36).slice(2, 8)}`; save(s); return { ...t, qr_url: `${window.location.origin}/order?t=${t.qr_token}` } },
 }
 

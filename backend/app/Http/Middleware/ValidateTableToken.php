@@ -8,17 +8,14 @@ use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-/**
- * Header X-Table-Token bersifat OPSIONAL (K-T2 PENDING: QR per meja vs satu QR umum).
- * Bila dikirim, token harus valid dan meja aktif; meja dipakai untuk mencocokkan nomor meja pesanan.
- */
+/** Legacy QR-header validation for routes that still accept table QR context. */
 class ValidateTableToken
 {
     public function handle(Request $request, Closure $next): Response
     {
         $token = $request->header('X-Table-Token');
         if ($token !== null && $token !== '') {
-            $table = Table::query()->where('qr_token', $token)->where('status', 'active')->first();
+            $table = Table::query()->numbered()->where('qr_token', $token)->where('status', 'active')->first();
             if (! $table) {
                 throw DomainError::tableInvalid('QR meja tidak dikenali atau sudah tidak berlaku.');
             }

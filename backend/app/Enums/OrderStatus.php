@@ -25,7 +25,7 @@ enum OrderStatus: string
     public function allowedNext(): array
     {
         return match ($this) {
-            self::MenungguPembayaran => [self::Dibayar, self::Selesai, self::Dibatalkan],
+            self::MenungguPembayaran => [self::Dibayar, self::Diproses, self::Selesai, self::Dibatalkan],
             self::Dibayar => [self::Diproses, self::Selesai, self::Dibatalkan],
             self::Diproses => [self::Selesai, self::Dibatalkan],
             self::Selesai, self::Dibatalkan => [],

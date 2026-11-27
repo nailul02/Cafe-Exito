@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Builder;
 
 class Table extends Model
 {
@@ -13,6 +14,11 @@ class Table extends Model
     protected $table = 'tables';
 
     protected $fillable = ['table_number', 'qr_token', 'status'];
+
+    public function scopeNumbered(Builder $query): Builder
+    {
+        return $query->whereIn('table_number', array_map('strval', range(1, 15)));
+    }
 
     public function orders(): HasMany
     {

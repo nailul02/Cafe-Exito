@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1\Customer;
 
+use App\Exceptions\DomainError;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ValidateCartRequest;
 use App\Http\Resources\CustomerMenuResource;
@@ -12,19 +13,18 @@ use App\Services\OrderService;
 use App\Services\SettingsService;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /** Endpoint pelanggan tanpa login: meja, katalog, pratinjau keranjang, petunjuk bayar. */
 class CatalogController extends Controller
 {
     public function table(string $qrToken)
     {
-        $table = Table::query()->where('qr_token', $qrToken)->where('status', 'active')->first();
+        $table = Table::query()->numbered()->where('qr_token', $qrToken)->where('status', 'active')->first();
         if (! $table) {
-            throw new NotFoundHttpException;
+            throw DomainError::tableInvalid('Nomor meja tidak ditemukan atau tidak tersedia.');
         }
 
-        return ApiResponse::success(['id' => $table->id, 'number' => $table->table_number]);
+        return ApiResponse::success(['number' => $table->table_number]);
     }
 
     public function menus(MenuAvailabilityService $availability)

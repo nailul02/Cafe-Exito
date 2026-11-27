@@ -12,10 +12,10 @@ export default function ManagerDashboardPage() {
   const res = useResource(() => reportsApi.managerDashboard(), [], { poll: true })
   return (
     <>
-      <PageHeader title="Dashboard" subtitle="Pantau pesanan dan ketersediaan menu secara langsung." />
+      <PageHeader title="Dashboard" subtitle="Pantau pesanan secara langsung." />
       <AsyncView res={res} empty={() => false}>
         {(d) => (
-          <div className="space-y-5">
+          <div className="space-y-5" data-testid="manager-dashboard-container">
             <div className="grid gap-3 sm:grid-cols-2">
               <StatCard label="Penjualan hari ini" value={rupiah(d?.revenue_today ?? 0)} />
               <StatCard label="Pesanan aktif" value={d?.active_orders?.total ?? 0} hint={`${d?.active_orders?.queued ?? 0} antre · ${d?.active_orders?.in_progress ?? 0} diproses`} />
@@ -43,11 +43,6 @@ export default function ManagerDashboardPage() {
                   ))}</ul>
                 )}
               </Card>
-              <div className="space-y-5">
-                <Card className="p-5"><h2 className="mb-3 font-ui font-semibold text-brand-ink">Menu tidak tersedia</h2>
-                  {!d?.unavailable_menus || d.unavailable_menus.length === 0 ? <p className="text-sm text-brand/70">Semua menu tersedia.</p> : <ul className="space-y-2 text-sm">{d.unavailable_menus.map((m) => <li key={m.id} className="flex justify-between"><span>{m.name}</span><Badge tone="bad">{m.reason}</Badge></li>)}</ul>}
-                </Card>
-              </div>
             </div>
           </div>
         )}
