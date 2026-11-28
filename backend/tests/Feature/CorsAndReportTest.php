@@ -9,10 +9,11 @@ class CorsAndReportTest extends ApiTestCase
 {
     public function test_preflight_origin_yang_diizinkan_lolos_dan_header_kustom_diizinkan(): void
     {
-        $this->call('OPTIONS', self::API.'/customer/orders', [], [], [], [
+        $response = $this->call('OPTIONS', self::API.'/customer/orders', [], [], [], [
             'HTTP_ORIGIN' => 'http://localhost:5173', 'HTTP_ACCESS_CONTROL_REQUEST_METHOD' => 'POST',
-            'HTTP_ACCESS_CONTROL_REQUEST_HEADERS' => 'content-type,x-table-token,authorization',
+            'HTTP_ACCESS_CONTROL_REQUEST_HEADERS' => 'content-type,x-table-token,x-table-session,authorization',
         ])->assertStatus(204)->assertHeader('Access-Control-Allow-Origin', 'http://localhost:5173');
+        $this->assertStringContainsString('x-table-session', strtolower($response->headers->get('Access-Control-Allow-Headers', '')));
     }
 
     public function test_origin_tidak_dikenal_tidak_mendapat_header_cors(): void
