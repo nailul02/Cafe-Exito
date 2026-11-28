@@ -11,6 +11,7 @@ import { AsyncView } from '../../components/ui/States'
 import PageHeader from '../../components/ui/PageHeader'
 import DevNote from '../../components/ui/DevNote'
 import { rupiah } from '../../lib/format'
+import { MenuImage } from '../../lib/menuImages'
 import { cn } from '../../lib/cn'
 import { useAuth } from '../../context/AuthContext'
 
@@ -83,7 +84,7 @@ export default function MenusPage() {
             {() => <ul className="space-y-2">{rows.map((menu) => (
               <li key={menu.id} data-testid={`menu-row-${menu.id}`}>
                 <div className={cn('flex items-center gap-3 rounded-2xl border bg-white p-3', selected?.id === menu.id ? 'border-accent ring-2 ring-accent/30' : 'border-black/5')}>
-                  {menu.image_url ? <img src={menu.image_url} alt="" className="h-12 w-12 rounded-xl object-cover" /> : <div className="grid h-12 w-12 place-items-center rounded-xl bg-cream text-[10px] text-brand/50" aria-hidden>Exito</div>}
+                  <MenuImage menu={menu} className="h-12 w-12 rounded-xl object-cover" fallbackClassName="grid h-12 w-12 place-items-center rounded-xl bg-cream text-[10px] text-brand/50" />
                   <button className="min-w-0 flex-1 text-left" onClick={() => setSelected(menu)}>
                     <p className="truncate font-medium text-brand-ink">{menu.name}</p>
                     <p className="text-xs text-brand/70">{menu.sku} · {menu.category.name} · {rupiah(menu.price)}</p>
