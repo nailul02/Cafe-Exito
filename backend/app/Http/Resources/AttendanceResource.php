@@ -12,7 +12,9 @@ class AttendanceResource extends JsonResource
     public function toArray(Request $request): array
     {
         $role = $this->user?->role;
-        $mayViewFullReport = app(PermissionService::class)->has($request->user(), 'attendance.report');
+        $permissions = app(PermissionService::class);
+        $mayViewFullReport = $permissions->has($request->user(), 'attendance.report');
+        $mayViewEvidence = $permissions->has($request->user(), 'attendance.view_all');
         $mayViewOwnEvents = $request->user()?->id === $this->user_id;
 
         return [
@@ -30,7 +32,7 @@ class AttendanceResource extends JsonResource
                 'role' => ['code' => $role?->value, 'label' => $role?->label()],
                 'station' => $this->user->station?->value,
             ]),
-            'events' => $this->whenLoaded('events', fn () => ($mayViewFullReport || $mayViewOwnEvents) ? $this->events->map(fn ($event) => [
+            'events' => $this->whenLoaded('events', fn () => ($mayViewEvidence || $mayViewOwnEvents) ? $this->events->map(fn ($event) => [
                 'id' => $event->id,
                 'event_type' => $event->event_type,
                 'recorded_at' => $event->recorded_at?->toIso8601String(),

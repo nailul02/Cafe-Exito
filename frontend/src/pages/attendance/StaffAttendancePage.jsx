@@ -110,8 +110,11 @@ export default function StaffAttendancePage() {
       ))
       const latitude = Number(position.coords.latitude)
       const longitude = Number(position.coords.longitude)
-      const parsedAccuracy = Number(position.coords.accuracy)
-      const accuracy = Number.isFinite(parsedAccuracy) && parsedAccuracy >= 0 ? parsedAccuracy : null
+      const accuracy = position.coords.accuracy
+      if (!Number.isFinite(accuracy) || accuracy < 0) {
+        setCaptureError('Browser tidak memberikan nilai akurasi GPS yang valid. Aktifkan layanan lokasi presisi lalu coba lagi.')
+        return
+      }
       if (!validCoordinates(latitude, longitude)) {
         setCaptureError('Koordinat yang diterima tidak valid. Aktifkan lokasi perangkat lalu coba lagi.')
         return
@@ -145,7 +148,7 @@ export default function StaffAttendancePage() {
     payload.append('photo', photo)
     payload.append('latitude', String(location.latitude))
     payload.append('longitude', String(location.longitude))
-    if (location.accuracy != null) payload.append('accuracy_meters', String(location.accuracy))
+    payload.append('accuracy_meters', String(location.accuracy))
     payload.append('device_info', navigator.userAgent.slice(0, 255))
     const result = await run(
       () => (isIn ? attendanceApi.checkIn(payload) : attendanceApi.checkOut(payload)),

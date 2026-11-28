@@ -13,7 +13,7 @@ class AttendanceEventRequest extends ApiRequest
             'photo' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'latitude' => ['required', 'numeric', 'between:-90,90'],
             'longitude' => ['required', 'numeric', 'between:-180,180'],
-            'accuracy_meters' => ['nullable', 'numeric', 'min:0', 'max:100000'],
+            'accuracy_meters' => ['required', 'numeric', 'min:0', 'max:100000'],
             'device_info' => ['nullable', 'string', 'max:255'],
             'notes' => ['nullable', 'string', 'max:500'],
         ];
