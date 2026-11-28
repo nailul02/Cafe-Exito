@@ -28,6 +28,7 @@ export default defineConfig({
         DB_USERNAME: 'cafe_exito_user',
         DB_SEARCH_PATH: 'public',
         DB_URL: '',
+        CORS_ALLOWED_ORIGINS: 'http://127.0.0.1:5178',
       },
     },
     {
