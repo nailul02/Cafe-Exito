@@ -1,9 +1,10 @@
+
 import { useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { env } from '../../config/env'
-import { HOME_BY_ROLE, getHomeByRole } from '../../lib/status'
+import { getHomeByRole } from '../../lib/status'
 import Button from '../../components/ui/Button'
 import { Field, Input } from '../../components/ui/Form'
 import { resetMock } from '../../mocks'
@@ -78,7 +79,9 @@ export default function LoginPage() {
             <Input
               data-testid="login-input"
               value={form.login}
-              onChange={(e) => setForm({ ...form, login: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, login: e.target.value })
+              }
               placeholder="nama@cafeexito.com"
               autoComplete="username"
               required
@@ -91,7 +94,9 @@ export default function LoginPage() {
                 data-testid="login-password"
                 type={showPassword ? 'text' : 'password'}
                 value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                onChange={(e) =>
+                  setForm({ ...form, password: e.target.value })
+                }
                 placeholder="••••••••"
                 autoComplete="current-password"
                 required
@@ -102,9 +107,17 @@ export default function LoginPage() {
                 type="button"
                 data-testid="toggle-password-visibility"
                 onClick={() => setShowPassword((prev) => !prev)}
-                className="absolute inset-y-0 right-0 flex items-center justify-center px-3 text-gray-500 hover:text-brand-ink focus:outline-none"
-                aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
-                title={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                className="absolute inset-y-0 right-0 flex items-center justify-center px-3 text-gray-500 transition-colors hover:text-brand-ink focus:outline-none"
+                aria-label={
+                  showPassword
+                    ? 'Sembunyikan password'
+                    : 'Tampilkan password'
+                }
+                title={
+                  showPassword
+                    ? 'Sembunyikan password'
+                    : 'Tampilkan password'
+                }
                 aria-pressed={showPassword}
               >
                 {showPassword ? (
@@ -143,7 +156,9 @@ export default function LoginPage() {
                 <button
                   key={u}
                   type="button"
-                  onClick={() => setForm({ login: u, password: 'password' })}
+                  onClick={() =>
+                    setForm({ login: u, password: 'password' })
+                  }
                   className="rounded-full bg-white px-3 py-1 font-medium text-brand-ink ring-1 ring-black/10"
                 >
                   {l}

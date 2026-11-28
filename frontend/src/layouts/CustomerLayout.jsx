@@ -164,13 +164,13 @@ export default function CustomerLayout() {
                 className="absolute inset-y-0 right-0 flex items-center justify-center px-3 text-gray-500 transition-colors hover:text-brand-ink focus:outline-none"
                 aria-label={
                   showPassword
-                    ? 'Sembunyikan kata sandi'
-                    : 'Tampilkan kata sandi'
+                    ? 'Sembunyikan password'
+                    : 'Tampilkan password'
                 }
                 title={
                   showPassword
-                    ? 'Sembunyikan kata sandi'
-                    : 'Tampilkan kata sandi'
+                    ? 'Sembunyikan password'
+                    : 'Tampilkan password'
                 }
               >
                 {showPassword ? (
