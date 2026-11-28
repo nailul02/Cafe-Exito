@@ -15,8 +15,8 @@ class AttendancePhotoController extends Controller
     public function __invoke(Request $request, AttendanceEvent $event, PermissionService $permissions): StreamedResponse
     {
         $viewer = $request->user();
-        $mayViewFullReport = $permissions->has($viewer, 'attendance.report');
-        if (! $mayViewFullReport && $event->user_id !== $viewer->id) {
+        $mayViewEvidence = $permissions->has($viewer, 'attendance.view_all');
+        if (! $mayViewEvidence && $event->user_id !== $viewer->id) {
             throw new AuthorizationException;
         }
         abort_unless(Storage::disk('local')->exists($event->photo_path), 404);

@@ -10,7 +10,7 @@ export default function ManagerAttendancePage() {
   return (
     <>
       <PageHeader title="Rekap Absensi" subtitle="Riwayat check-in dan check-out seluruh pegawai." />
-      <AttendanceReportTable res={attendanceRes} />
+      <AttendanceReportTable res={attendanceRes} showEvidence />
     </>
   )
 }

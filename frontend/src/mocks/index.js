@@ -427,14 +427,14 @@ const mockAttendancePayload = (payload, userId, type) => {
   const photo = get('photo')
   const rawLatitude = get('latitude')
   const rawLongitude = get('longitude')
-    const rawAccuracy = get('accuracy_meters')
+  const rawAccuracy = get('accuracy_meters')
   const latitude = Number(rawLatitude)
   const longitude = Number(rawLongitude)
-    const accuracy = rawAccuracy == null || rawAccuracy === '' ? null : Number(rawAccuracy)
-    if (!photo || rawLatitude == null || rawLatitude === '' || rawLongitude == null || rawLongitude === '' || !Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180 || (accuracy != null && (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > 100000))) {
-    throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Foto dan koordinat GPS yang valid wajib diisi.' })
+  const accuracy = rawAccuracy == null || rawAccuracy === '' ? null : Number(rawAccuracy)
+  if (!photo || rawLatitude == null || rawLatitude === '' || rawLongitude == null || rawLongitude === '' || !Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180 || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 100000) {
+    throw new ApiError({ status: 422, code: 'VALIDATION_FAILED', message: 'Foto, koordinat GPS, dan akurasi lokasi yang valid wajib diisi.' })
   }
-    return { userId, type, latitude, longitude, accuracy_meters: accuracy, device_info: get('device_info'), photo_name: photo.name }
+  return { userId, type, latitude, longitude, accuracy_meters: accuracy, device_info: get('device_info'), photo_name: photo.name }
 }
 
 // ---------- Absensi demo: metadata foto/GPS mengikuti kontrak API. ----------

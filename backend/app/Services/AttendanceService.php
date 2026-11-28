@@ -125,8 +125,9 @@ class AttendanceService
             || (float) $centerLongitude < -180 || (float) $centerLongitude > 180) {
             throw new \App\Exceptions\DomainError(
                 'ATTENDANCE_GEOFENCE_UNAVAILABLE',
-                'Absensi sementara tidak tersedia. Silakan hubungi administrator.',
+                'Absensi belum dicatat: koordinat pusat Cafe Éxito belum dikonfigurasi. Administrator harus menetapkan CAFE_LOCATION_LATITUDE dan CAFE_LOCATION_LONGITUDE dari koordinat resmi Cafe.',
                 503,
+                ['required_configuration' => ['CAFE_LOCATION_LATITUDE', 'CAFE_LOCATION_LONGITUDE']],
             );
         }
 
@@ -140,8 +141,9 @@ class AttendanceService
         if (! is_finite($radius) || $radius <= 0 || $radius !== 30.0) {
             throw new \App\Exceptions\DomainError(
                 'ATTENDANCE_GEOFENCE_UNAVAILABLE',
-                'Absensi sementara tidak tersedia. Silakan hubungi administrator.',
+                'Absensi belum dicatat: konfigurasi radius geofence harus bernilai 30 meter.',
                 503,
+                ['required_configuration' => ['attendance.geofence.radius_meters' => 30]],
             );
         }
 

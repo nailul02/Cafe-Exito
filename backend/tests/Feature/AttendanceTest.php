@@ -37,15 +37,25 @@ class AttendanceTest extends ApiTestCase
         $this->assertSame(2, AttendanceEvent::query()->where('user_id', $user->id)->count());
         $this->assertDatabaseHas('attendance_events', ['user_id' => $user->id, 'event_type' => 'check_in', 'latitude' => 37.5, 'longitude' => -122.2]);
         $this->assertDatabaseHas('attendance_events', ['user_id' => $user->id, 'event_type' => 'check_in', 'accuracy_meters' => 7.25]);
+        $this->assertDatabaseHas('attendance_events', ['user_id' => $user->id, 'event_type' => 'check_out', 'latitude' => 37.5, 'longitude' => -122.2, 'accuracy_meters' => 7.25]);
         $this->assertDatabaseHas('audit_logs', ['user_id' => $user->id, 'action' => 'attendance.check_in']);
         $event = AttendanceEvent::query()->where('user_id', $user->id)->where('event_type', 'check_in')->firstOrFail();
         Storage::disk('local')->assertExists($event->photo_path);
+        $checkOutEvent = AttendanceEvent::query()->where('user_id', $user->id)->where('event_type', 'check_out')->firstOrFail();
+        Storage::disk('local')->assertExists($checkOutEvent->photo_path);
         $this->getJson(self::API.'/attendance/my-history')->assertOk()->assertJsonPath('data.0.user.id', $user->id);
         $this->get(self::API.'/attendance/events/'.$event->id.'/photo')->assertOk();
         $this->actingAsRole(UserRole::Kasir);
         $this->getJson(self::API.'/attendance/events/'.$event->id.'/photo')->assertForbidden();
         $this->actingAsRole(UserRole::Manager);
-        $this->get(self::API.'/attendance/events/'.$event->id.'/photo')->assertForbidden();
+        $this->getJson(self::API.'/attendance/list')->assertOk()->assertJsonFragment([
+            'id' => $event->id,
+            'event_type' => 'check_in',
+            'latitude' => 37.5,
+            'longitude' => -122.2,
+            'accuracy_meters' => 7.25,
+        ]);
+        $this->get(self::API.'/attendance/events/'.$event->id.'/photo')->assertOk();
         $this->actingAsRole(UserRole::Owner);
         $this->get(self::API.'/attendance/events/'.$event->id.'/photo')->assertOk();
     }
@@ -55,6 +65,7 @@ class AttendanceTest extends ApiTestCase
         $this->actingAsRole(UserRole::Kasir);
         $this->postJson(self::API.'/attendance/check-in', [])->assertUnprocessable();
         $this->post(self::API.'/attendance/check-in', ['photo' => UploadedFile::fake()->image('selfie.jpg'), 'latitude' => 91, 'longitude' => 0])->assertUnprocessable();
+        $this->post(self::API.'/attendance/check-in', array_diff_key($this->attendancePayload(), ['accuracy_meters' => true]))->assertUnprocessable();
         $this->post(self::API.'/attendance/check-in', [...$this->attendancePayload(), 'accuracy_meters' => -1])->assertUnprocessable();
         $this->post(self::API.'/attendance/check-in', ['photo' => UploadedFile::fake()->createWithContent('selfie.jpg', 'not an image'), 'latitude' => 1, 'longitude' => 1])->assertUnprocessable();
     }
@@ -85,6 +96,29 @@ class AttendanceTest extends ApiTestCase
         $this->assertSame($attendanceCount, Attendance::count());
     }
 
+    public function test_geofence_menggunakan_koordinat_resmi_cafe_exito(): void
+    {
+        Storage::fake('local');
+        $centerLatitude = -0.82916000033243;
+        $centerLongitude = 100.3541924079484;
+        config([
+            'attendance.geofence.latitude' => $centerLatitude,
+            'attendance.geofence.longitude' => $centerLongitude,
+            'attendance.geofence.radius_meters' => 30.0,
+        ]);
+        $metersPerDegree = 111195.0802335329;
+
+        $this->actingAsRole(UserRole::Kasir);
+        $this->post(self::API.'/attendance/check-in', $this->attendancePayload($centerLatitude + 29 / $metersPerDegree, $centerLongitude))
+            ->assertOk()->assertJsonPath('data.checked_in', true);
+
+        $attendanceCount = Attendance::count();
+        $this->actingAsRole(UserRole::Manager);
+        $this->post(self::API.'/attendance/check-in', $this->attendancePayload($centerLatitude + 31 / $metersPerDegree, $centerLongitude))
+            ->assertUnprocessable()->assertJsonValidationErrors('latitude');
+        $this->assertSame($attendanceCount, Attendance::count());
+    }
+
     public function test_geofence_gagal_tertutup_jika_lokasi_backend_belum_dikonfigurasi(): void
     {
         $attendanceCount = Attendance::count();
@@ -92,7 +126,11 @@ class AttendanceTest extends ApiTestCase
         config(['attendance.geofence.latitude' => null, 'attendance.geofence.longitude' => null]);
 
         $this->post(self::API.'/attendance/check-in', $this->attendancePayload())
-            ->assertStatus(503)->assertJsonPath('error.code', 'ATTENDANCE_GEOFENCE_UNAVAILABLE');
+            ->assertStatus(503)
+            ->assertJsonPath('error.code', 'ATTENDANCE_GEOFENCE_UNAVAILABLE')
+            ->assertJsonPath('message', 'Absensi belum dicatat: koordinat pusat Cafe Éxito belum dikonfigurasi. Administrator harus menetapkan CAFE_LOCATION_LATITUDE dan CAFE_LOCATION_LONGITUDE dari koordinat resmi Cafe.')
+            ->assertJsonPath('error.details.required_configuration.0', 'CAFE_LOCATION_LATITUDE')
+            ->assertJsonPath('error.details.required_configuration.1', 'CAFE_LOCATION_LONGITUDE');
         config(['attendance.geofence.latitude' => 91.0, 'attendance.geofence.longitude' => 0.0]);
         $this->post(self::API.'/attendance/check-in', $this->attendancePayload())
             ->assertStatus(503)->assertJsonPath('error.code', 'ATTENDANCE_GEOFENCE_UNAVAILABLE');
