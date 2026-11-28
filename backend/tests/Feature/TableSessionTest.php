@@ -142,6 +142,8 @@ class TableSessionTest extends ApiTestCase
         $this->actingAsRole(UserRole::Owner);
         $this->postJson(self::API."/refunds/$refundId/decision", ['decision' => 'approved'])->assertOk();
         $this->actingAsRole(UserRole::Kasir);
+        $this->postJson(self::API."/refunds/$refundId/execute", ['method' => 'cash', 'confirm_cash' => true])->assertForbidden();
+        $this->actingAsRole(UserRole::Owner);
         $this->postJson(self::API."/refunds/$refundId/execute", ['method' => 'cash', 'confirm_cash' => true])->assertOk();
 
         $this->assertSame('closed', \App\Models\TableSession::findOrFail($sessionId)->status);
