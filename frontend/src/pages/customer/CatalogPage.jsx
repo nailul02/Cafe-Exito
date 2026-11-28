@@ -7,6 +7,7 @@ import { AsyncView } from '../../components/ui/States'
 import { cn } from '../../lib/cn'
 import { rupiah } from '../../lib/format'
 import { tokenStorage } from '../../api/tokenStorage'
+import { MenuImage } from '../../lib/menuImages'
 
 const GROUPS = [['minuman', 'Minuman'], ['makanan', 'Makanan'], ['cemilan', 'Cemilan']]
 
@@ -52,7 +53,7 @@ export default function CatalogPage({ allowNoTable = false }) {
                   <ul className="divide-y divide-black/5">
                 {menus.map((m) => (
                   <li key={m.id} data-testid={`menu-item-${m.id}`} className={cn('flex items-center gap-4 py-5', !m.is_orderable && 'opacity-60')}>
-                    {m.image_url ? <img src={m.image_url} alt="" className="h-14 w-16 rounded-xl object-cover" /> : <div className="grid h-14 w-16 place-items-center rounded-xl bg-cream text-xs text-brand/50" aria-hidden>Exito</div>}
+                    <MenuImage menu={m} className="h-14 w-16 rounded-xl object-cover" />
                     <div className="min-w-0 flex-1">
                       <p className="text-lg font-medium leading-tight">{m.name}</p>
                       <p className="font-medium text-[#797474]">{rupiah(m.price)}</p>
