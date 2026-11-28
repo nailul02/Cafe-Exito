@@ -20,7 +20,7 @@ const login = async (user, username) => {
   const open = screen.queryByRole('button', { name: 'Login Karyawan' })
   if (open) await user.click(open)
   await user.type(screen.getByLabelText(/email atau username/i), username)
-  await user.type(screen.getByLabelText(/password/i), 'password')
+  await user.type(screen.getByLabelText('Password'), 'password')
   await user.click(screen.getByRole('button', { name: 'Login' }))
 }
 const beginCustomerSession = async (user, tableNumber = '6', customerName = 'Pelanggan Test') => {
@@ -119,11 +119,11 @@ describe('alur lengkap dengan data mock', () => {
     await user.type(password, 'password')
     expect(password).toHaveAttribute('type', 'password')
 
-    await user.click(screen.getByRole('button', { name: 'Tampilkan kata sandi' }))
+    await user.click(screen.getByRole('button', { name: 'Tampilkan password' }))
     expect(password).toHaveAttribute('type', 'text')
     expect(password).toHaveValue('password')
 
-    await user.click(screen.getByRole('button', { name: 'Sembunyikan kata sandi' }))
+    await user.click(screen.getByRole('button', { name: 'Sembunyikan password' }))
     expect(password).toHaveAttribute('type', 'password')
     expect(password).toHaveValue('password')
   })
@@ -225,7 +225,7 @@ describe('alur lengkap dengan data mock', () => {
     mount('/')
     await login(user, 'ucup')
     expect(screen.getByLabelText(/email atau username/i)).toHaveValue('ucup')
-    expect(screen.getByLabelText(/password/i)).toHaveValue('password')
+    expect(screen.getByLabelText('Password')).toHaveValue('password')
     expect(await screen.findByText('Dashboard Kasir')).toBeInTheDocument()
     expect(await screen.findByText('Verifikasi Pembayaran')).toBeInTheDocument()
   })
@@ -272,7 +272,7 @@ describe('alur lengkap dengan data mock', () => {
     mount('/')
     await user.click(screen.getByRole('button', { name: 'Login Karyawan' }))
     await user.type(screen.getByLabelText(/email atau username/i), 'ucup')
-    await user.type(screen.getByLabelText(/password/i), 'salah-sandi')
+    await user.type(screen.getByLabelText('Password'), 'salah-sandi')
     await user.click(screen.getByRole('button', { name: 'Login' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/salah/i))
     expect(screen.getByRole('dialog', { name: 'Login Karyawan' })).toBeInTheDocument()
