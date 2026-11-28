@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Storage;
 
 class RefundWorkflowTest extends ApiTestCase
 {
-    public function test_owner_approval_then_cashier_execution_is_audited_and_idempotent(): void
+    public function test_owner_approval_then_owner_execution_is_audited_and_idempotent(): void
     {
         $this->table();$menu=$this->menuWithRecipe('Latte',['Beans'=>[1000,1]],false,20000);
         $token=$this->placeOrder([['menu_id'=>$menu->id,'qty'=>1]],'qris')->assertCreated()->json('data.public_token');
@@ -21,9 +21,10 @@ class RefundWorkflowTest extends ApiTestCase
         $refund=RefundRequest::query()->whereIn('payment_id', $order->payments()->select('id'))->latest('id')->firstOrFail();
         $this->actingAsRole(UserRole::Manager);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertForbidden();
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertOk()->assertJsonPath('data.status','approved');
-        $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'cash','confirm_cash'=>true])->assertOk()->assertJsonPath('data.status','completed');
+        $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'cash','confirm_cash'=>true])->assertForbidden();
+        $owner=$this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'cash','confirm_cash'=>true])->assertOk()->assertJsonPath('data.status','completed');
         $this->assertSame('refunded',$order->payment->refresh()->status->value);
-        $this->assertDatabaseHas('refund_executions',['refund_request_id'=>$refund->id,'amount'=>20000,'method'=>'cash']);
+        $this->assertDatabaseHas('refund_executions',['refund_request_id'=>$refund->id,'amount'=>20000,'method'=>'cash','executed_by'=>$owner->id,'cashier_id'=>null]);
         $this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'cash','confirm_cash'=>true])->assertStatus(409);
     }
 
@@ -34,7 +35,8 @@ class RefundWorkflowTest extends ApiTestCase
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$o->payment->id.'/verify')->assertOk();
         $this->postJson(self::API."/customer/orders/$token/cancel",['detail_id'=>$o->details->first()->id,'qty'=>1,'reason'=>'Batal'])->assertOk();$refund=RefundRequest::query()->whereIn('payment_id', $o->payments()->select('id'))->latest('id')->firstOrFail();
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertOk();
-        $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer'])->assertUnprocessable();
+        $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer'])->assertForbidden();
+        $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer'])->assertUnprocessable();
     }
 
     public function test_owner_cannot_decide_refund_for_order_created_by_that_owner(): void
@@ -87,12 +89,15 @@ class RefundWorkflowTest extends ApiTestCase
         $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API.'/cashier/payments/'.$order->payment->id.'/verify')->assertOk();
         $first=$this->postJson(self::API.'/refunds',['payment_id'=>$order->payment->id,'amount'=>10000,'reason'=>'Refund parsial'])->assertCreated()->json('data.id');
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/$first/decision",['decision'=>'approved'])->assertOk();
-        $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/$first/execute",['method'=>'cash','confirm_cash'=>true])->assertOk();
+        $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/$first/execute",['method'=>'cash','confirm_cash'=>true])->assertForbidden();
+        $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/$first/execute",['method'=>'cash','confirm_cash'=>true])->assertOk();
         $this->assertSame('verified',$order->payment->refresh()->status->value);
+        $this->actingAsRole(UserRole::Kasir);
         $this->postJson(self::API.'/refunds',['payment_id'=>$order->payment->id,'amount'=>11000,'reason'=>'Melebihi sisa'])->assertStatus(409)->assertJsonPath('error.code','REFUND_LIMIT_EXCEEDED');
         $second=$this->postJson(self::API.'/refunds',['payment_id'=>$order->payment->id,'amount'=>10000,'reason'=>'Sisa refund'])->assertCreated()->json('data.id');
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/$second/decision",['decision'=>'approved'])->assertOk();
-        $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/$second/execute",['method'=>'cash','confirm_cash'=>true])->assertOk();
+        $this->actingAsRole(UserRole::Kasir);$this->postJson(self::API."/refunds/$second/execute",['method'=>'cash','confirm_cash'=>true])->assertForbidden();
+        $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/$second/execute",['method'=>'cash','confirm_cash'=>true])->assertOk();
         $this->assertSame('refunded',$order->payment->refresh()->status->value);
     }
 
@@ -141,10 +146,11 @@ class RefundWorkflowTest extends ApiTestCase
     {
         Storage::fake('private');[$refund] = $this->makeVerifiedManualRefund();
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertOk();
-        $this->actingAsRole(UserRole::Kasir);$this->post(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer','reference_number'=>'TRX-123','proof'=>UploadedFile::fake()->image('proof.jpg')])->assertOk();
+        $this->actingAsRole(UserRole::Kasir);$this->post(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer','reference_number'=>'TRX-123','proof'=>UploadedFile::fake()->image('proof.jpg')])->assertForbidden();
+        $owner=$this->actingAsRole(UserRole::Owner);$this->post(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer','reference_number'=>'TRX-123','proof'=>UploadedFile::fake()->image('proof.jpg')])->assertOk();
         $refund->refresh();$path=$refund->execution->proof_path;Storage::disk('private')->assertExists($path);
         $this->get(self::API."/refunds/{$refund->id}/proof")->assertOk();
-        $this->actingAsRole(UserRole::Owner);$this->get(self::API."/refunds/{$refund->id}/proof")->assertOk();
+        $this->actingAs($owner);$this->get(self::API."/refunds/{$refund->id}/proof")->assertOk();
         $this->actingAsRole(UserRole::Manager);$this->get(self::API."/refunds/{$refund->id}/proof")->assertForbidden();
     }
 
@@ -152,7 +158,8 @@ class RefundWorkflowTest extends ApiTestCase
     {
         Storage::fake('private');[$refund] = $this->makeVerifiedManualRefund();
         $this->actingAsRole(UserRole::Owner);$this->postJson(self::API."/refunds/{$refund->id}/decision",['decision'=>'approved'])->assertOk();
-        $this->actingAsRole(UserRole::Kasir);$this->post(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer','proof'=>UploadedFile::fake()->image('proof.jpg')])->assertUnprocessable();
+        $this->actingAsRole(UserRole::Kasir);$this->post(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer','proof'=>UploadedFile::fake()->image('proof.jpg')])->assertForbidden();
+        $this->actingAsRole(UserRole::Owner);$this->post(self::API."/refunds/{$refund->id}/execute",['method'=>'bank_transfer','proof'=>UploadedFile::fake()->image('proof.jpg')])->assertUnprocessable();
     }
 
     public function test_deadline_notifications_are_idempotent_across_repeated_command_runs(): void

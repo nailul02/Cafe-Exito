@@ -66,6 +66,15 @@ class PermissionMatrixTest extends TestCase
         $this->assertNotContains('menus.manage', $kasir);
     }
 
+    public function test_owner_menyetujui_dan_mengeksekusi_refund_sedangkan_manager_hanya_melihat_audit(): void
+    {
+        $this->assertContains('refund.review', $this->config['roles']['owner']);
+        $this->assertContains('refund.execute', $this->config['roles']['owner']);
+        $this->assertNotContains('refund.execute', $this->config['roles']['kasir']);
+        $this->assertNotContains('refund.execute', $this->config['roles']['manager']);
+        $this->assertNotContains('refund.execute', $this->config['roles']['barista_kitchen']);
+    }
+
     public function test_izin_yang_dapat_diberikan_tidak_memuat_izin_berbahaya(): void
     {
         foreach (['users.manage', 'permissions.grant', 'stock.adjust', 'payments.verify', 'menus.manage', 'reports.view', 'orders.cancel'] as $p) {

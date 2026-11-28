@@ -130,9 +130,12 @@ class RefundService
         });
     }
 
-    public function execute(RefundRequest $refund, User $cashier, array $data): RefundRequest
+    public function execute(RefundRequest $refund, User $executor, array $data): RefundRequest
     {
-        return DB::transaction(function () use ($refund, $cashier, $data) {
+        return DB::transaction(function () use ($refund, $executor, $data) {
+            if (! in_array($executor->role->value, ['owner', 'kasir'], true)) {
+                throw DomainError::forbidden();
+            }
             $paymentId = RefundRequest::whereKey($refund->id)->value('payment_id');
             $orderId = Payment::whereKey($paymentId)->value('order_id');
             Order::whereKey($orderId)->lockForUpdate()->firstOrFail();
@@ -145,20 +148,20 @@ class RefundService
                 throw new DomainError('REFUND_LIMIT_EXCEEDED', 'Nilai refund melampaui pembayaran.', 409);
             }$method = $data['method'];
             if ($method === 'cash' && ($data['confirm_cash'] ?? false) !== true && ($data['confirm_cash'] ?? null) !== '1') {
-                throw new DomainError('VALIDATION_FAILED', 'Cashier wajib mengonfirmasi pengembalian tunai.', 422);
+                throw new DomainError('VALIDATION_FAILED', 'Pelaksana wajib mengonfirmasi pengembalian tunai.', 422);
             }if ($method === 'bank_transfer' && (! $data['reference_number'] || ! isset($data['proof']))) {
                 throw new DomainError('VALIDATION_FAILED', 'Bukti dan nomor referensi transfer wajib.', 422);
             }$proof = isset($data['proof']) ? $data['proof']->store('refund-proofs', 'private') : null;
-            RefundExecution::create(['refund_request_id' => $r->id, 'cashier_id' => $cashier->id, 'method' => $method, 'amount' => $r->amount, 'reference_number' => $data['reference_number'] ?? null, 'proof_path' => $proof, 'executed_at' => now()]);
+            RefundExecution::create(['refund_request_id' => $r->id, 'cashier_id' => $executor->role->value === 'kasir' ? $executor->id : null, 'executed_by' => $executor->id, 'method' => $method, 'amount' => $r->amount, 'reference_number' => $data['reference_number'] ?? null, 'proof_path' => $proof, 'executed_at' => now()]);
             $r->update(['status' => 'completed', 'completed_at' => now()]);
             $total = (int) RefundRequest::query()->where('payment_id', $r->payment_id)->where('status', 'completed')->sum('amount');
             if ($total >= (int) $payment->amount) {
                 $payment->update(['status' => 'refunded']);
             }$details = ['method' => $method, 'amount' => $r->amount, 'reference_number' => $data['reference_number'] ?? null, 'proof_uploaded' => (bool) $proof];
-            $this->event($r, $cashier, 'cashier', 'completed', $details);
+            $this->event($r, $executor, $executor->role->value === 'owner' ? 'owner' : 'cashier', 'completed', $details);
             $this->notifications->sendRole('owner', 'refund.completed', ['refund_request_id' => $r->id]);
             $this->notifyRequester($r, 'refund.completed');
-            $this->audit->record($cashier, 'refund.completed', 'refund_request', $r->id, $details);
+            $this->audit->record($executor, 'refund.completed', 'refund_request', $r->id, $details);
 
             return $r->load('execution');
         });

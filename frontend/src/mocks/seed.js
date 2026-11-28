@@ -1,9 +1,9 @@
 ﻿// Data contoh realistis untuk mode mock. Bukan data Cafe Exito yang sebenarnya.
 // Semua kata sandi akun mock: "password".
 export const PERMISSION_DEFAULTS = {
-  owner: ['dashboard.owner', 'orders.view', 'orders.cancel', 'transactions.view', 'queue.view_all', 'menus.view', 'menus.manage', 'menus.availability', 'reports.view', 'attendance.view_all', 'users.manage', 'permissions.grant', 'refund.review', 'refund.audit', 'refund.conflict.document', 'notifications.view'],
+  owner: ['dashboard.owner', 'orders.view', 'orders.cancel', 'transactions.view', 'queue.view_all', 'menus.view', 'menus.manage', 'menus.availability', 'reports.view', 'attendance.view_all', 'users.manage', 'permissions.grant', 'refund.review', 'refund.execute', 'refund.audit', 'refund.conflict.document', 'notifications.view'],
   manager: ['dashboard.manager', 'orders.view', 'transactions.view', 'queue.view_all', 'menus.view', 'menus.manage', 'tables.manage', 'reports.view', 'audit.view', 'attendance.view_all', 'attendance.record', 'refund.conflict.document', 'notifications.view'],
-  kasir: ['dashboard.cashier', 'payments.verify', 'transactions.view', 'menus.view', 'orders.create_pos', 'attendance.record', 'refund.view', 'refund.execute', 'refund.request', 'notifications.view'],
+  kasir: ['dashboard.cashier', 'payments.verify', 'transactions.view', 'menus.view', 'orders.create_pos', 'attendance.record', 'refund.view', 'refund.request', 'notifications.view'],
   barista_kitchen: ['dashboard.station', 'queue.barista', 'queue.kitchen', 'menus.view', 'menus.availability', 'attendance.record', 'notifications.view'],
 }
 export const GRANTABLE = ['queue.barista', 'queue.kitchen', 'menus.view', 'attendance.record']
